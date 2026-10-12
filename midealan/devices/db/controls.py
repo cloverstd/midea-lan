@@ -17,6 +17,9 @@ from midealan.exceptions import ValueWrongType
 PROFILE_MODEL = "38131140"
 PROFILE_SUBTYPE = 13145
 MINIMUM_STATUS_LENGTH = 31
+STATUS_IDLE = 0
+STATUS_STANDBY = 1
+STATUS_END = 4
 TEMPERATURE_OFFSET = 7
 SPIN_SPEED_OFFSET = 8
 WATER_LEVEL_OFFSET = 5
@@ -99,7 +102,7 @@ class DBControls(LaundryControls):
 
     device_type = DeviceType.DB
     minimum_status_length = MINIMUM_STATUS_LENGTH
-    editable_statuses = (0, 1, 4)
+    editable_statuses = (STATUS_IDLE, STATUS_STANDBY, STATUS_END)
     fields: ClassVar[dict[ControlAttributes, ParameterField]] = {
         ControlAttributes.program_control: ParameterField(PROGRAM_OFFSET, PROGRAMS),
         ControlAttributes.temperature_control: ParameterField(
