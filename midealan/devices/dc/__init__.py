@@ -238,6 +238,8 @@ class MideaDCDevice(MideaDevice):
                 value,
                 self._message_protocol_version,
             )
+            if attr == DeviceAttributes.appointment and value is False:
+                self.build_send(MessageStart(self._message_protocol_version))
             self.build_send(message_set)
             self.build_send(MessageQuery(self._message_protocol_version))
             return

@@ -98,6 +98,12 @@ rejected; use the completion deadline to supply a valid positive wait.
 - DB reports the flag at body byte 13 mask `02` and the little-endian wait at
   bytes 14-15. Its complete 54-byte V2 setter preserves basic and cloud-cycle
   fields, writes both the legacy flag and byte 35's two-bit field (`F7`/`F3`).
+- DC cancellation sends pause first, then a parameter command with start
+  unchanged that clears the reservation flag/wait request. Combining pause and
+  clear in one frame only pauses the active reservation. After cancellation the
+  device returns to standby with the flag off; it retains the inactive wait
+  counter until powered off. That counter does not produce a completion
+  estimate while the flag is off.
 - DC reports the flag in byte 12's low two bits and the wait at bytes 14-15.
   The setter uses `FD`/`FC` for that field, leaving adjacent anti-wrinkle bits
   unchanged. Start is on for actual operation (2) and active reservation wait

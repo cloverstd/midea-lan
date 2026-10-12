@@ -105,8 +105,11 @@ def test_cancel_pauses_and_clears_both_fields_without_starting(
     device = factory(report)
     with patch.object(device, "build_send") as send:
         device.set_attribute(Attr.appointment, False)
-    body = send.call_args_list[0].args[0].body
-    assert body[1:3] == bytes([255, 0])
+    clear_index = 0 if factory is washer else 1
+    if factory is dryer:
+        assert send.call_args_list[0].args[0].body == bytes([2, 255, 0])
+    body = send.call_args_list[clear_index].args[0].body
+    assert body[1:3] == bytes([255, 0 if factory is washer else 255])
     assert body[14:16] == bytes(2)
     assert body[3:12] == report[3:12]
     if factory is washer:
@@ -224,7 +227,18 @@ def test_dryer_can_edit_or_cancel_a_selected_but_not_started_reservation() -> No
     with patch.object(device, "build_send") as send:
         device.set_attribute(Attr.appointment, False)
     assert send.call_args_list[0].args[0].body[2] == 0
-    assert send.call_args_list[0].args[0].body[12] == 0xFC
+    assert send.call_args_list[1].args[0].body[12] == 0xFC
+
+
+def test_cancelled_dryer_with_retained_inactive_wait_has_no_deadline() -> None:
+    """The dryer retains the last wait after cancellation until powered off."""
+    report = bytearray(DC_RESERVED)
+    report[2] = 1
+    report[12] &= ~3
+    device = dryer(report)
+    assert device.get_attribute(Attr.appointment) is False
+    assert device.get_attribute(Attr.appointment_finish) is None
+    assert device.get_attribute("start") is False
 
 
 def test_dryer_verified_duration_above_255_uses_minutes_not_hours() -> None:

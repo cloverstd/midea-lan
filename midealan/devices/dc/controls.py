@@ -6,10 +6,10 @@ from midealan.const import DeviceType
 from midealan.devices.laundry import (
     APPOINTMENT_TIME_END,
     APPOINTMENT_TIME_OFFSET,
-    PAUSE_COMMAND,
     PROGRAM_OFFSET,
     START_COMMAND,
     STATUS_OFFSET,
+    UNCHANGED,
     ControlAttributes,
     ControlValue,
     LaundryControls,
@@ -141,7 +141,9 @@ class DCControls(LaundryControls):
         body[BASIC_PARAMETER_START:BASIC_PARAMETER_END] = self.body[
             BASIC_PARAMETER_START:BASIC_PARAMETER_END
         ]
-        body[STATUS_OFFSET] = START_COMMAND if enabled else PAUSE_COMMAND
+        # Active reservation cancellation first uses a separate pause command.
+        # Combining pause with these fields makes the device ignore the clear.
+        body[STATUS_OFFSET] = START_COMMAND if enabled else UNCHANGED
         body[APPOINTMENT_REPORT_OFFSET] = APPOINTMENT_ON if enabled else APPOINTMENT_OFF
         body[APPOINTMENT_TIME_OFFSET:APPOINTMENT_TIME_END] = wait.to_bytes(2, "little")
         return body
