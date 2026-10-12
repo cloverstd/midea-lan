@@ -9,6 +9,8 @@ from midealan.message import (
     MessageType,
 )
 
+MINIMUM_STATUS_LENGTH = 31
+
 
 class MessageDBBase(MessageRequest):
     """DB message base."""
@@ -151,8 +153,16 @@ class MessageDBResponse(MessageResponse):
     def __init__(self, message: bytes) -> None:
         """Initialize DB message response."""
         super().__init__(bytearray(message))
-        if self.message_type in [MessageType.query, MessageType.set] or (
-            self.message_type == MessageType.notify1 and self.body_type == ListTypes.X04
+        if (
+            len(super().body) >= MINIMUM_STATUS_LENGTH
+            and super().body[1] in (0, 1)
+            and (
+                self.message_type in [MessageType.query, MessageType.set]
+                or (
+                    self.message_type == MessageType.notify1
+                    and self.body_type == ListTypes.X04
+                )
+            )
         ):
             self.set_body(DBGeneralMessageBody(super().body))
         self.set_attr()

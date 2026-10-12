@@ -6,8 +6,10 @@ from typing import Any, ClassVar, Unpack
 
 from midealan.const import DeviceType
 from midealan.device import MideaDevice, MideaDeviceInitKwargs
+from midealan.devices.laundry import ControlAttributes
 from midealan.exceptions import ValueWrongType
 
+from .controls import PROFILE_MODEL, PROFILE_SUBTYPE, PROGRAMS, DBControls
 from .message import MessageDBResponse, MessagePower, MessageQuery, MessageStart
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,6 +35,17 @@ class DeviceAttributes(StrEnum):
     washing_data = "washing_data"
     progress = "progress"
     time_remaining = "time_remaining"
+    parameter_control_supported = ControlAttributes.parameter_control_supported
+    parameter_controls_available = ControlAttributes.parameter_controls_available
+    program_control = ControlAttributes.program_control
+    temperature_control = ControlAttributes.temperature_control
+    spin_speed_control = ControlAttributes.spin_speed_control
+    water_level_control = ControlAttributes.water_level_control
+    detergent_control = ControlAttributes.detergent_control
+    rinse_count = ControlAttributes.rinse_count
+    wash_time_control = ControlAttributes.wash_time_control
+    spin_time_control = ControlAttributes.spin_time_control
+    forget_free = ControlAttributes.forget_free
     stains = "stains"
     dirty_degree = "dirty_degree"
 
@@ -227,6 +240,19 @@ class MideaDBDevice(MideaDevice):
             },
         )
 
+        self._controls = (
+            DBControls()
+            if self.subtype == PROFILE_SUBTYPE
+            and PROFILE_MODEL in (self.model, self.sn8)
+            else None
+        )
+        if self._controls is not None:
+            self._attributes.update(self._controls.attributes)
+
+    def get_parameter_options(self, attr: str) -> list[str]:
+        """Return verified model options, including actual-minute time choices."""
+        return self._controls.options(attr) if self._controls is not None else []
+
     def build_query(self) -> list[MessageQuery]:
         """Midea DB device build query."""
         return [MessageQuery(self._message_protocol_version)]
@@ -264,8 +290,10 @@ class MideaDBDevice(MideaDevice):
                 # parse program
                 elif attr == DeviceAttributes.program:
                     self._attributes[DeviceAttributes.program] = (
-                        MideaDBDevice._program.get(value, value)
-                    )
+                        self._program | PROGRAMS
+                        if self._controls is not None
+                        else self._program
+                    ).get(value, value)
                 # parse temperature
                 elif attr == DeviceAttributes.temperature:
                     self._attributes[DeviceAttributes.temperature] = (
@@ -277,10 +305,23 @@ class MideaDBDevice(MideaDevice):
                 else:
                     self._attributes[attr] = value
                 new_status[str(attr)] = self._attributes[attr]
+        if self._controls is not None and hasattr(message, "washing_data"):
+            controls = self._controls.update(message.body)
+            self._attributes.update(controls)
+            new_status.update({str(attr): value for attr, value in controls.items()})
         return new_status
 
     def set_attribute(self, attr: str, value: bool | float | str) -> None:
         """Midea DB device set attribute."""
+        if self._controls is not None and self._controls.supports(attr):
+            message_set = self._controls.make_message(
+                attr,
+                value,
+                self._message_protocol_version,
+            )
+            self.build_send(message_set)
+            self.build_send(MessageQuery(self._message_protocol_version))
+            return
         if not isinstance(value, bool):
             raise ValueWrongType("[db] Expected bool")
         message: MessagePower | MessageStart | None = None
