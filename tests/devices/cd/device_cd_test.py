@@ -676,68 +676,198 @@ class TestMideaCDDevice:
         assert self.device.attributes[DeviceAttributes.auto_sterilize_hour] == 8
         assert self.device.attributes[DeviceAttributes.auto_sterilize_minute] == 15
 
-    def test_process_message_forced_conversions_rsjrac06(self) -> None:
-        """RSJRAC06 forces fahrenheit outdoor and old-protocol current temps."""
-        device = _make_device(model="RSJRAC06")
+    @pytest.mark.parametrize("model", ["RSJRAC06", "RSJRAC07"])
+    @pytest.mark.parametrize(
+        ("fahrenheit", "raw_current"),
+        [(False, 110), (True, 104)],
+    )
+    def test_process_message_forced_conversions(
+        self,
+        model: str,
+        *,
+        fahrenheit: bool,
+        raw_current: int,
+    ) -> None:
+        """RSJRAC06/07 retain Fahrenheit precedence for current readings."""
+        device = _make_device(model=model)
         assert device._lua_protocol == LuaProtocol.new
-
-        class FakeMessage:
-            outdoor_temperature = 68.0
-            current_temperature = 110.0
-
-        with patch(
-            "midealan.devices.cd.MessageCDResponse",
-            return_value=FakeMessage(),
-        ):
-            status = device.process_message(b"")
+        body = _general_body()
+        body[35] = 0x80 if fahrenheit else 0x00
+        body[8] = 68
+        body[4] = raw_current
+        status = device.process_message(_build_message(MessageType.query, body))
         assert status[DeviceAttributes.outdoor_temperature.value] == 20.0
         assert status[DeviceAttributes.current_temperature.value] == 40
 
-    def test_process_message_old_auxiliary_protocol_rsj000cb(self) -> None:
-        """RSJ000CB keeps new main temps and uses old auxiliary scaling."""
+    @pytest.mark.parametrize("message_type", [MessageType.query, MessageType.notify2])
+    @pytest.mark.parametrize(
+        ("body_hex", "current", "top", "bottom", "outdoor", "condenser", "compressor"),
+        [
+            pytest.param(
+                "01011531348773495f19462609001100110508000031000000000000"
+                "070300000000030000000000000000000000060b0000000000",
+                52.0,
+                52.5,
+                42.5,
+                22.5,
+                21.5,
+                -2.5,
+                id="first-log",
+            ),
+            pytest.param(
+                "01019531348787345c50462609001100110508000031000000000000"
+                "870300000000040000000000000000000000060b0000000000",
+                52.0,
+                52.5,
+                52.5,
+                21.0,
+                11.0,
+                25.0,
+                id="log2",
+            ),
+            pytest.param(
+                "01019531358887345c50462609001100110508000031000000000000"
+                "870300000000040000000000000000000000060b0000000000",
+                53.0,
+                53.0,
+                52.5,
+                21.0,
+                11.0,
+                25.0,
+                id="log2-tank-change",
+            ),
+        ],
+    )
+    def test_process_message_mixed_temperatures_rsj000cb(
+        self,
+        message_type: MessageType,
+        body_hex: str,
+        current: float,
+        top: float,
+        bottom: float,
+        outdoor: float,
+        condenser: float,
+        compressor: float,
+    ) -> None:
+        """Recorded RSJ000CB frames keep main values and Lua sensor identities."""
         device = _make_device(model="RSJ000CB")
         assert device._lua_protocol == LuaProtocol.new
+        body = bytearray.fromhex(body_hex)
+        status = device.process_message(_build_message(message_type, body))
 
-        class FakeMessage:
-            target_temperature = 38.0
-            current_temperature = 57.0
-            outdoor_temperature = 91.0
-            condenser_temperature = 73.0
-            compressor_temperature = 23.0
+        assert status[DeviceAttributes.target_temperature.value] == 49.0
+        assert status[DeviceAttributes.current_temperature.value] == current
+        assert status[DeviceAttributes.max_temperature.value] == 70.0
+        assert status[DeviceAttributes.min_temperature.value] == 38.0
+        assert status[DeviceAttributes.top_temperature.value] == top
+        assert status[DeviceAttributes.bottom_temperature.value] == bottom
+        assert status[DeviceAttributes.outdoor_temperature.value] == outdoor
+        assert status[DeviceAttributes.condenser_temperature.value] == condenser
+        assert status[DeviceAttributes.compressor_temperature.value] == compressor
+        assert status[DeviceAttributes.compressor_status.value] is False
+        assert status[DeviceAttributes.water_level.value] == body[34]
+        assert status[DeviceAttributes.fahrenheit.value] is False
 
-        with patch(
-            "midealan.devices.cd.MessageCDResponse",
-            return_value=FakeMessage(),
-        ):
-            status = device.process_message(b"")
-
-        assert status[DeviceAttributes.target_temperature.value] == 38.0
-        assert status[DeviceAttributes.current_temperature.value] == 57.0
-        assert status[DeviceAttributes.outdoor_temperature.value] == 30
-        assert status[DeviceAttributes.condenser_temperature.value] == 22
-        assert status[DeviceAttributes.compressor_temperature.value] == -4
-
-    def test_process_message_old_auxiliary_protocol_precedes_fahrenheit_flag(
+    def test_process_message_mixed_sensors_ignore_fahrenheit_flag(
         self,
     ) -> None:
-        """RSJ000CB old auxiliary scaling wins over the global unit flag."""
+        """RSJ000CB sensor offsets are separate from main unit conversion."""
         device = _make_device(model="RSJ000CB")
+        body = _general_body()
+        body[3] = 104
+        body[4] = 104
+        body[5] = 135
+        body[6] = 115
+        body[7] = 73
+        body[8] = 92
+        body[9] = 23
+        body[10] = 149
+        body[11] = 95
+        body[35] = 0x80
+        status = device.process_message(_build_message(MessageType.query, body))
 
-        class FakeMessage:
-            fahrenheit = True
-            outdoor_temperature = 91.0
-            condenser_temperature = 73.0
-            compressor_temperature = 23.0
+        assert status[DeviceAttributes.fahrenheit.value] is True
+        assert status[DeviceAttributes.target_temperature.value] == 40.0
+        assert status[DeviceAttributes.current_temperature.value] == 40.0
+        assert status[DeviceAttributes.max_temperature.value] == 65.0
+        assert status[DeviceAttributes.min_temperature.value] == 35.0
+        assert status[DeviceAttributes.top_temperature.value] == 52.5
+        assert status[DeviceAttributes.bottom_temperature.value] == 42.5
+        assert status[DeviceAttributes.condenser_temperature.value] == 21.5
+        assert status[DeviceAttributes.outdoor_temperature.value] == 21.0
+        assert status[DeviceAttributes.compressor_temperature.value] == -3.5
 
-        with patch(
-            "midealan.devices.cd.MessageCDResponse",
-            return_value=FakeMessage(),
-        ):
-            status = device.process_message(b"")
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [(40, -5.0), (50, 0.0), (60, 5.0), (61, 5.5), (89, 19.5)],
+    )
+    def test_process_message_mixed_outdoor_has_no_raw_threshold(
+        self,
+        raw: int,
+        expected: float,
+    ) -> None:
+        """The outdoor candidate preserves half degrees and negative values."""
+        device = _make_device(model="RSJ000CB")
+        body = _general_body()
+        body[8] = raw
+        status = device.process_message(_build_message(MessageType.query, body))
+        assert status[DeviceAttributes.outdoor_temperature.value] == expected
 
-        assert status[DeviceAttributes.outdoor_temperature.value] == 30
-        assert status[DeviceAttributes.condenser_temperature.value] == 22
-        assert status[DeviceAttributes.compressor_temperature.value] == -4
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [(20, -5.0), (30, 0.0), (40, 5.0), (60, 15.0), (61, 15.5)],
+    )
+    def test_process_message_mixed_tank_has_no_raw_threshold(
+        self,
+        raw: int,
+        expected: float,
+    ) -> None:
+        """The tank candidate also decodes values at or below the bridge cutoff."""
+        device = _make_device(model="RSJ000CB")
+        body = _general_body()
+        body[5] = raw
+        body[6] = raw
+        status = device.process_message(_build_message(MessageType.query, body))
+        assert status[DeviceAttributes.top_temperature.value] == expected
+        assert status[DeviceAttributes.bottom_temperature.value] == expected
+
+    @pytest.mark.parametrize(
+        "model",
+        ["test_model", "RSJ18RD2", "RSJRAC01", "RSJRAC06", "RSJRAC07"],
+    )
+    @pytest.mark.parametrize("fahrenheit", [False, True])
+    def test_process_message_other_models_keep_raw_tank_temperatures(
+        self,
+        model: str,
+        *,
+        fahrenheit: bool,
+    ) -> None:
+        """Only RSJ000CB gets the mixed-encoding tank correction."""
+        device = _make_device(model=model)
+        body = _general_body()
+        body[5] = 135
+        body[6] = 115
+        body[35] = 0x80 if fahrenheit else 0x00
+        status = device.process_message(_build_message(MessageType.query, body))
+        assert status[DeviceAttributes.top_temperature.value] == 135.0
+        assert status[DeviceAttributes.bottom_temperature.value] == 115.0
+
+    def test_rsj000cb_target_write_keeps_new_protocol_encoding(self) -> None:
+        """Mixed sensor offsets never affect the target-temperature write."""
+        device = _make_device(model="RSJ000CB")
+        body = _general_body()
+        body[3] = 49
+        body[4] = 52
+        body[10] = 70
+        body[11] = 38
+        device.process_message(_build_message(MessageType.query, body))
+        with patch.object(device, "build_send") as mock_send:
+            device.set_attribute(DeviceAttributes.target_temperature.value, 50.0)
+            mock_send.assert_called_once()
+            message = mock_send.call_args[0][0]
+            assert message.use_old_protocol is False
+            assert message.body[4] == 50
+            assert message.body[23] == 70
 
     # ------------------------------------------------------------------ #
     # set_attribute branches                                               #

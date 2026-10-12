@@ -27,6 +27,10 @@ from .message import (
 
 _LOGGER = logging.getLogger(__name__)
 
+MIXED_SENSOR_TEMPERATURE_OFFSET = 30.0
+MIXED_OUTDOOR_TEMPERATURE_OFFSET = 50.0
+MIXED_SENSOR_TEMPERATURE_DIVISOR = 2.0
+
 
 class CDSubType(IntEnum):
     """CD Device sub type."""
@@ -133,7 +137,7 @@ class DeviceAttributes(StrEnum):
 class MideaCDDevice(MideaDevice):
     """Midea CD device."""
 
-    _old_auxiliary_temperature_models: ClassVar[set[str]] = {"RSJ000CB"}
+    _mixed_temperature_models: ClassVar[set[str]] = {"RSJ000CB"}
 
     _modes: ClassVar[dict[int, str]] = {
         0x00: "none",
@@ -267,18 +271,22 @@ class MideaCDDevice(MideaDevice):
         force_fahrenheit: bool,
         force_old: bool,
     ) -> float:
-        # Model-specific old scaling must take precedence over the global
-        # Fahrenheit flag for mixed-encoding auxiliary fields.
-        if force_old:
-            return round((value - 30.0) / 2)
         # fahrenheit to celsius
         if self._fahrenheit or force_fahrenheit:
             return self.fahrenheit_to_celsius(value, True if force_fahrenheit else None)
         # celsius old protocol
-        if self._lua_protocol == LuaProtocol.old:
-            return round((value - 30.0) / 2)
+        if self._lua_protocol == LuaProtocol.old or force_old:
+            return round(
+                (value - MIXED_SENSOR_TEMPERATURE_OFFSET)
+                / MIXED_SENSOR_TEMPERATURE_DIVISOR,
+            )
         # new protocol
         return value
+
+    @staticmethod
+    def _mixed_temperature_value(value: float, offset: float) -> float:
+        """Decode a half-degree sensor value with its field-specific offset."""
+        return (value - offset) / MIXED_SENSOR_TEMPERATURE_DIVISOR
 
     def _temperature_to_value(self, value: float) -> float:
         # celsius to fahrenheit
@@ -287,7 +295,10 @@ class MideaCDDevice(MideaDevice):
         # celsius
         # old protocol
         if self._lua_protocol == LuaProtocol.old:
-            return round(value * 2 + 30.0)
+            return round(
+                value * MIXED_SENSOR_TEMPERATURE_DIVISOR
+                + MIXED_SENSOR_TEMPERATURE_OFFSET,
+            )
         # new protocol
         return value
 
@@ -453,6 +464,25 @@ class MideaCDDevice(MideaDevice):
                     # Skip unknown values; the next device status notification
                     # will correct the mode.
                     continue
+                # RSJ000CB mixes direct main temperatures with half-degree
+                # sensor values. T4 uses a different offset; keep the Lua
+                # sensor mapping and do not apply the display-unit flag here.
+                if self.model in self._mixed_temperature_models and attr in [
+                    DeviceAttributes.top_temperature,
+                    DeviceAttributes.bottom_temperature,
+                    DeviceAttributes.outdoor_temperature,
+                    DeviceAttributes.condenser_temperature,
+                    DeviceAttributes.compressor_temperature,
+                ]:
+                    offset = (
+                        MIXED_OUTDOOR_TEMPERATURE_OFFSET
+                        if attr == DeviceAttributes.outdoor_temperature
+                        else MIXED_SENSOR_TEMPERATURE_OFFSET
+                    )
+                    parsed = self._mixed_temperature_value(raw_value, offset)
+                    self._attributes[attr] = parsed
+                    new_status[str(attr)] = parsed
+                    continue
                 # process temperature family
                 if attr in [
                     DeviceAttributes.max_temperature,
@@ -465,22 +495,13 @@ class MideaCDDevice(MideaDevice):
                 ]:
                     is_outdoor_temp = attr == DeviceAttributes.outdoor_temperature
                     is_current_temp = attr == DeviceAttributes.current_temperature
-                    is_auxiliary_temp = attr in [
-                        DeviceAttributes.outdoor_temperature,
-                        DeviceAttributes.condenser_temperature,
-                        DeviceAttributes.compressor_temperature,
-                    ]
                     parsed = self._value_to_temperature(
                         raw_value,
                         force_fahrenheit=(
                             self.model in ["RSJRAC06", "RSJRAC07"] and is_outdoor_temp
                         ),
                         force_old=(
-                            (self.model in ["RSJRAC06", "RSJRAC07"] and is_current_temp)
-                            or (
-                                self.model in self._old_auxiliary_temperature_models
-                                and is_auxiliary_temp
-                            )
+                            self.model in ["RSJRAC06", "RSJRAC07"] and is_current_temp
                         ),
                     )
                     # Defensive: ignore invalid zeros for min/max/target/current
