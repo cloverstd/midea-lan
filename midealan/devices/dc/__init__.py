@@ -6,10 +6,19 @@ from typing import Any, ClassVar, Unpack
 
 from midealan.const import DeviceType
 from midealan.device import MideaDevice, MideaDeviceInitKwargs
-from midealan.devices.laundry import ControlAttributes
+from midealan.devices.laundry import STATUS_OFFSET, ControlAttributes
 from midealan.exceptions import ValueWrongType
 
-from .controls import PROFILE_MODEL, PROFILE_SUBTYPE, PROGRAMS, DCControls
+from .controls import (
+    BASIC_PARAMETER_END,
+    BASIC_PARAMETER_START,
+    PROFILE_MODEL,
+    PROFILE_SUBTYPE,
+    PROGRAMS,
+    STATUS_DELAY,
+    STATUS_START,
+    DCControls,
+)
 from .message import MessageDCResponse, MessagePower, MessageQuery, MessageStart
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,6 +42,10 @@ class DeviceAttributes(StrEnum):
     washing_data = "washing_data"
     progress = "progress"
     time_remaining = "time_remaining"
+    appointment_control_supported = ControlAttributes.appointment_control_supported
+    appointment_controls_available = ControlAttributes.appointment_controls_available
+    appointment = ControlAttributes.appointment
+    appointment_finish = ControlAttributes.appointment_finish
     parameter_control_supported = ControlAttributes.parameter_control_supported
     parameter_controls_available = ControlAttributes.parameter_controls_available
     program_control = ControlAttributes.program_control
@@ -200,6 +213,19 @@ class MideaDCDevice(MideaDevice):
                 new_status[str(status)] = self._attributes[status]
         if self._controls is not None and hasattr(message, "washing_data"):
             controls = self._controls.update(message.body)
+            self._attributes[DeviceAttributes.start] = message.body[STATUS_OFFSET] in (
+                STATUS_START,
+                STATUS_DELAY,
+            )
+            new_status[DeviceAttributes.start] = self._attributes[
+                DeviceAttributes.start
+            ]
+            self._attributes[DeviceAttributes.time_remaining] = (
+                self._controls.remaining_minutes()
+            )
+            new_status[DeviceAttributes.time_remaining] = self._attributes[
+                DeviceAttributes.time_remaining
+            ]
             self._attributes.update(controls)
             new_status.update({str(attr): value for attr, value in controls.items()})
         return new_status
@@ -225,7 +251,13 @@ class MideaDCDevice(MideaDevice):
         elif attr == DeviceAttributes.start:
             message = MessageStart(self._message_protocol_version)
             message.start = value
-            message.washing_data = self._attributes[DeviceAttributes.washing_data]
+            message.washing_data = (
+                bytearray(
+                    self._controls.body[BASIC_PARAMETER_START:BASIC_PARAMETER_END],
+                )
+                if self._controls is not None and self._controls.body
+                else self._attributes[DeviceAttributes.washing_data]
+            )
             self.build_send(message)
 
 

@@ -4,7 +4,12 @@ from typing import ClassVar
 
 from midealan.const import DeviceType
 from midealan.devices.laundry import (
+    APPOINTMENT_TIME_END,
+    APPOINTMENT_TIME_OFFSET,
+    PAUSE_COMMAND,
     PROGRAM_OFFSET,
+    START_COMMAND,
+    STATUS_OFFSET,
     ControlAttributes,
     ControlValue,
     LaundryControls,
@@ -49,6 +54,13 @@ BASIC_PARAMETER_START = 3
 BASIC_PARAMETER_END = 16
 CLOUD_PROGRAM_START = 36
 CLOUD_PROGRAM_END = 38
+STATUS_DELAY = 6
+STATUS_DELAY_PAUSE = 8
+APPOINTMENT_REPORT_OFFSET = 13
+APPOINTMENT_REPORT_MASK = 0x02
+APPOINTMENT_CONTROL_OFFSET = 35
+APPOINTMENT_OFF = 0xF3
+APPOINTMENT_ON = 0xF7
 
 PROGRAMS = {
     31: "water_mixed_wash",
@@ -103,6 +115,7 @@ class DBControls(LaundryControls):
     device_type = DeviceType.DB
     minimum_status_length = MINIMUM_STATUS_LENGTH
     editable_statuses = (STATUS_IDLE, STATUS_STANDBY, STATUS_END)
+    appointment_statuses = (STATUS_DELAY, STATUS_DELAY_PAUSE)
     fields: ClassVar[dict[ControlAttributes, ParameterField]] = {
         ControlAttributes.program_control: ParameterField(PROGRAM_OFFSET, PROGRAMS),
         ControlAttributes.temperature_control: ParameterField(
@@ -136,6 +149,38 @@ class DBControls(LaundryControls):
     def is_editable(self) -> bool:
         """Only edit a standby washer in normal operating mode."""
         return super().is_editable() and self.body[MODE_OFFSET] == NORMAL_MODE
+
+    def appointment_enabled(self) -> bool:
+        """Read the washer's single-bit reservation flag."""
+        return bool(self.body[APPOINTMENT_REPORT_OFFSET] & APPOINTMENT_REPORT_MASK)
+
+    def appointment_available(self) -> bool:
+        """Require the V2 cloud-cycle fields and normal operating mode."""
+        return (
+            super().appointment_available()
+            and len(self.body) >= CLOUD_PROGRAM_END
+            and self.body[MODE_OFFSET] == NORMAL_MODE
+        )
+
+    def encode_appointment(self, *, enabled: bool, wait: int) -> bytearray:
+        """Register/cancel atomically, preserving the complete cloud program."""
+        body = parameter_body(FRESH_BODY_LENGTH)
+        body[BASIC_PARAMETER_START:BASIC_PARAMETER_END] = self.body[
+            BASIC_PARAMETER_START:BASIC_PARAMETER_END
+        ]
+        body[STATUS_OFFSET] = START_COMMAND if enabled else PAUSE_COMMAND
+        body[APPOINTMENT_REPORT_OFFSET] = self.body[
+            APPOINTMENT_REPORT_OFFSET
+        ] & ~APPOINTMENT_REPORT_MASK | (APPOINTMENT_REPORT_MASK if enabled else 0)
+        body[APPOINTMENT_TIME_OFFSET:APPOINTMENT_TIME_END] = wait.to_bytes(2, "little")
+        body[V2_CONTROL_OFFSET] = V2_CONTROL_VERSION
+        body[APPOINTMENT_CONTROL_OFFSET] = (
+            APPOINTMENT_ON if enabled else APPOINTMENT_OFF
+        )
+        body[CLOUD_PROGRAM_START:CLOUD_PROGRAM_END] = self.body[
+            CLOUD_PROGRAM_START:CLOUD_PROGRAM_END
+        ]
+        return body
 
     def minute_codes(self, attr: ControlAttributes) -> dict[str, int]:
         """Calculate options from effective minutes and the request level."""

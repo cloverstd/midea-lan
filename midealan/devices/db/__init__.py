@@ -35,6 +35,10 @@ class DeviceAttributes(StrEnum):
     washing_data = "washing_data"
     progress = "progress"
     time_remaining = "time_remaining"
+    appointment_control_supported = ControlAttributes.appointment_control_supported
+    appointment_controls_available = ControlAttributes.appointment_controls_available
+    appointment = ControlAttributes.appointment
+    appointment_finish = ControlAttributes.appointment_finish
     parameter_control_supported = ControlAttributes.parameter_control_supported
     parameter_controls_available = ControlAttributes.parameter_controls_available
     program_control = ControlAttributes.program_control

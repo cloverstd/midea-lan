@@ -4,7 +4,12 @@ from typing import ClassVar
 
 from midealan.const import DeviceType
 from midealan.devices.laundry import (
+    APPOINTMENT_TIME_END,
+    APPOINTMENT_TIME_OFFSET,
+    PAUSE_COMMAND,
     PROGRAM_OFFSET,
+    START_COMMAND,
+    STATUS_OFFSET,
     ControlAttributes,
     ControlValue,
     LaundryControls,
@@ -45,6 +50,15 @@ TIMED_PROGRAM = 26
 TIMED_EXTRA_MAX = 170
 TIMED_EXTRA_STEP = 10
 UNKNOWN_CODE = 0xFF
+STATUS_START = 2
+STATUS_DELAY = 8
+STATUS_DELAY_PAUSE = 9
+APPOINTMENT_REPORT_OFFSET = 12
+APPOINTMENT_MASK = 0x03
+APPOINTMENT_OFF = 0xFC
+APPOINTMENT_ON = 0xFD
+BASIC_PARAMETER_START = 3
+BASIC_PARAMETER_END = 16
 
 PROGRAMS = {
     2: "mixed_wash",
@@ -99,6 +113,7 @@ class DCControls(LaundryControls):
         STATUS_END,
         STATUS_PREVENT_WRINKLE_END,
     )
+    appointment_statuses = (STATUS_DELAY, STATUS_DELAY_PAUSE)
     fields: ClassVar[dict[ControlAttributes, ParameterField]] = {
         ControlAttributes.program_control: ParameterField(PROGRAM_OFFSET, PROGRAMS),
         ControlAttributes.dryness_control: ParameterField(
@@ -113,6 +128,22 @@ class DCControls(LaundryControls):
         ControlAttributes.anti_wrinkle,
         ControlAttributes.timed_extra,
     )
+
+    def appointment_enabled(self) -> bool | None:
+        """Decode reservation independently of the adjacent anti-wrinkle field."""
+        code = self.body[APPOINTMENT_REPORT_OFFSET] & APPOINTMENT_MASK
+        return bool(code) if code in (0, 1) else None
+
+    def encode_appointment(self, *, enabled: bool, wait: int) -> bytearray:
+        """Keep all selected parameters and change only reservation and start."""
+        body = parameter_body()
+        body[BASIC_PARAMETER_START:BASIC_PARAMETER_END] = self.body[
+            BASIC_PARAMETER_START:BASIC_PARAMETER_END
+        ]
+        body[STATUS_OFFSET] = START_COMMAND if enabled else PAUSE_COMMAND
+        body[APPOINTMENT_REPORT_OFFSET] = APPOINTMENT_ON if enabled else APPOINTMENT_OFF
+        body[APPOINTMENT_TIME_OFFSET:APPOINTMENT_TIME_END] = wait.to_bytes(2, "little")
+        return body
 
     def feature(self, offset: int) -> bool | None:
         """Decode the two-bit field without turning unavailable into off."""
