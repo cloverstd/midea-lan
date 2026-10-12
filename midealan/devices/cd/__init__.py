@@ -471,8 +471,6 @@ class MideaCDDevice(MideaDevice):
                     DeviceAttributes.top_temperature,
                     DeviceAttributes.bottom_temperature,
                     DeviceAttributes.outdoor_temperature,
-                    DeviceAttributes.condenser_temperature,
-                    DeviceAttributes.compressor_temperature,
                 ]:
                     offset = (
                         MIXED_OUTDOOR_TEMPERATURE_OFFSET

@@ -710,8 +710,8 @@ class TestMideaCDDevice:
                 52.5,
                 42.5,
                 22.5,
-                21.5,
-                -2.5,
+                73.0,
+                25.0,
                 id="first-log",
             ),
             pytest.param(
@@ -721,8 +721,8 @@ class TestMideaCDDevice:
                 52.5,
                 52.5,
                 21.0,
-                11.0,
-                25.0,
+                52.0,
+                80.0,
                 id="log2",
             ),
             pytest.param(
@@ -732,8 +732,8 @@ class TestMideaCDDevice:
                 53.0,
                 52.5,
                 21.0,
-                11.0,
-                25.0,
+                52.0,
+                80.0,
                 id="log2-tank-change",
             ),
         ],
@@ -749,7 +749,7 @@ class TestMideaCDDevice:
         condenser: float,
         compressor: float,
     ) -> None:
-        """Recorded RSJ000CB frames keep main values and Lua sensor identities."""
+        """Recorded frames correct only empirical tank and outdoor fields."""
         device = _make_device(model="RSJ000CB")
         assert device._lua_protocol == LuaProtocol.new
         body = bytearray.fromhex(body_hex)
@@ -793,9 +793,11 @@ class TestMideaCDDevice:
         assert status[DeviceAttributes.min_temperature.value] == 35.0
         assert status[DeviceAttributes.top_temperature.value] == 52.5
         assert status[DeviceAttributes.bottom_temperature.value] == 42.5
-        assert status[DeviceAttributes.condenser_temperature.value] == 21.5
+        assert status[DeviceAttributes.condenser_temperature.value] == pytest.approx(
+            (73.0 - 32.0) * 5 / 9,
+        )
         assert status[DeviceAttributes.outdoor_temperature.value] == 21.0
-        assert status[DeviceAttributes.compressor_temperature.value] == -3.5
+        assert status[DeviceAttributes.compressor_temperature.value] == -5.0
 
     @pytest.mark.parametrize(
         ("raw", "expected"),
