@@ -51,6 +51,7 @@ TIMED_EXTRA_MAX = 170
 TIMED_EXTRA_STEP = 10
 UNKNOWN_CODE = 0xFF
 STATUS_START = 2
+STATUS_DELAY_CHOOSING = 6
 STATUS_DELAY = 8
 STATUS_DELAY_PAUSE = 9
 APPOINTMENT_REPORT_OFFSET = 12
@@ -113,7 +114,7 @@ class DCControls(LaundryControls):
         STATUS_END,
         STATUS_PREVENT_WRINKLE_END,
     )
-    appointment_statuses = (STATUS_DELAY, STATUS_DELAY_PAUSE)
+    appointment_statuses = (STATUS_DELAY_CHOOSING, STATUS_DELAY, STATUS_DELAY_PAUSE)
     fields: ClassVar[dict[ControlAttributes, ParameterField]] = {
         ControlAttributes.program_control: ParameterField(PROGRAM_OFFSET, PROGRAMS),
         ControlAttributes.dryness_control: ParameterField(

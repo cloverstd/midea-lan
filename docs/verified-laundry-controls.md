@@ -26,8 +26,8 @@ DC permits pause in addition to standby/end states.
 dynamic actual-minute options. `set_attribute(attribute, value)` validates the
 option and current state, sends a parameter frame, then queries status over the
 existing connection. It never assigns optimistic state. Power and start bytes
-remain `FF` in parameter frames; only ordinary explicit power/start operations
-use the existing commands.
+remain `FF` in ordinary parameter frames; completion reservations are described
+separately below because they explicitly register or cancel a future cycle.
 
 DB selects: `program_control`, `temperature_control`, `spin_speed_control`,
 `rinse_count`, `water_level_control`, `detergent_control`, `wash_time_control`,
@@ -65,8 +65,9 @@ DC selects: `program_control`, `dryness_control`, `temperature_control`; switche
 - DIY/pollen-allergy drying is omitted: there is no confirmed dedicated program
   code or write protocol. Hanfu™ program names have distinct canonical options.
 
-All hardware verification kept the appliances in standby and restored their
-original settings; no washing or drying cycle was started. Regression fixtures
+Hardware verification used standby and distant reservations, then cancelled
+reservations and restored the original power state; no washing or drying cycle
+was executed. Regression fixtures
 contain anonymous status bodies, without transport identities, SNs or credentials.
 The complete native control migration is additionally tested offline.
 
@@ -74,3 +75,40 @@ Protocol references: [DB V2 manufacturer Lua reference](https://github.com/Cybor
 [DC extended temperature reference](https://github.com/sususweet/midea_auto_cloud/issues/247),
 [another DC encoder](https://github.com/sususweet/midea_auto_cloud/issues/259).
 The downloaded Lua was inspected, not executed or vendored.
+
+## Completion-time reservations
+
+Both profiles additionally expose `appointment_control_supported`,
+`appointment_controls_available`, `appointment` and `appointment_finish`.
+Reservations have a separate state guard so they can be edited or cancelled while
+ordinary program parameters remain read-only.
+
+`set_attribute("appointment_finish", timezone_bearing_iso_datetime)` registers a
+**future automatic cycle**. It requires a whole-minute deadline in the next 24
+hours and subtracts the current device-reported program duration to calculate
+waiting minutes. A missing duration, past/over-24-hour deadline or non-positive
+wait is rejected. The timestamp reported in `appointment_finish` is an estimate
+based on the current wait plus program duration, cleared when the flag is off.
+
+`set_attribute("appointment", False)` cancels: the command explicitly pauses and
+clears both the reservation flag and waiting-minute request. It preserves the
+selected program and other parameters. Setting `appointment=True` alone is
+rejected; use the completion deadline to supply a valid positive wait.
+
+- DB reports the flag at body byte 13 mask `02` and the little-endian wait at
+  bytes 14-15. Its complete 54-byte V2 setter preserves basic and cloud-cycle
+  fields, writes both the legacy flag and byte 35's two-bit field (`F7`/`F3`).
+- DC reports the flag in byte 12's low two bits and the wait at bytes 14-15.
+  The setter uses `FD`/`FC` for that field, leaving adjacent anti-wrinkle bits
+  unchanged. Start is on for actual operation (2) and active reservation wait
+  (8), off for reservation selection (6) and reservation pause (9). Reservation
+  selection still permits deadline editing/cancellation. Start/resume preserves
+  the wait's high byte. This behavior applies only to the verified profile.
+- Both verified profiles report program duration as little-endian minute counts.
+  The verified dryer overrides the legacy hours/minutes calculation.
+
+App-created reservations confirmed that waiting time excludes program duration.
+Regression fixtures cover active/paused/selected reservations, cancellation,
+complete parameter preservation, timezone-bearing deadlines and invalid inputs.
+Ordinary parameter frames retain unchanged power/start bytes; reservation frames
+explicitly register a future cycle or pause/cancel it.

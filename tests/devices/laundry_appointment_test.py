@@ -213,6 +213,20 @@ def test_dryer_resuming_reservation_keeps_wait_high_byte() -> None:
     assert send.call_args.args[0].body[14:16] == (422).to_bytes(2, "little")
 
 
+def test_dryer_can_edit_or_cancel_a_selected_but_not_started_reservation() -> None:
+    """Status 6 occurs after setting only the flag/wait with start unchanged."""
+    report = bytearray(DC_RESERVED)
+    report[2] = 6
+    device = dryer(report)
+    assert device.get_attribute("start") is False
+    assert device.get_attribute(Attr.parameter_controls_available) is False
+    assert device.get_attribute(Attr.appointment_controls_available) is True
+    with patch.object(device, "build_send") as send:
+        device.set_attribute(Attr.appointment, False)
+    assert send.call_args_list[0].args[0].body[2] == 0
+    assert send.call_args_list[0].args[0].body[12] == 0xFC
+
+
 def test_dryer_verified_duration_above_255_uses_minutes_not_hours() -> None:
     """Verified dryers report a sixteen-bit minute duration."""
     report = bytearray(DC_RESERVED)
