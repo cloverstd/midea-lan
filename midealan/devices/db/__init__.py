@@ -6,11 +6,18 @@ from typing import Any, ClassVar, Unpack
 
 from midealan.const import DeviceType
 from midealan.device import MideaDevice, MideaDeviceInitKwargs
-from midealan.devices.laundry import ControlAttributes
 from midealan.exceptions import ValueWrongType
 
-from .controls import PROFILE_MODEL, PROFILE_SUBTYPE, PROGRAMS, DBControls
-from .message import MessageDBResponse, MessagePower, MessageQuery, MessageStart
+from .message import (
+    PROFILE_MODEL,
+    PROFILE_SUBTYPE,
+    PROGRAMS,
+    DBControls,
+    MessageDBResponse,
+    MessagePower,
+    MessageQuery,
+    MessageStart,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,21 +42,21 @@ class DeviceAttributes(StrEnum):
     washing_data = "washing_data"
     progress = "progress"
     time_remaining = "time_remaining"
-    appointment_control_supported = ControlAttributes.appointment_control_supported
-    appointment_controls_available = ControlAttributes.appointment_controls_available
-    appointment = ControlAttributes.appointment
-    appointment_finish = ControlAttributes.appointment_finish
-    parameter_control_supported = ControlAttributes.parameter_control_supported
-    parameter_controls_available = ControlAttributes.parameter_controls_available
-    program_control = ControlAttributes.program_control
-    temperature_control = ControlAttributes.temperature_control
-    spin_speed_control = ControlAttributes.spin_speed_control
-    water_level_control = ControlAttributes.water_level_control
-    detergent_control = ControlAttributes.detergent_control
-    rinse_count = ControlAttributes.rinse_count
-    wash_time_control = ControlAttributes.wash_time_control
-    spin_time_control = ControlAttributes.spin_time_control
-    forget_free = ControlAttributes.forget_free
+    appointment_control_supported = "appointment_control_supported"
+    appointment_controls_available = "appointment_controls_available"
+    appointment = "appointment"
+    appointment_finish = "appointment_finish"
+    parameter_control_supported = "parameter_control_supported"
+    parameter_controls_available = "parameter_controls_available"
+    program_control = "program_control"
+    temperature_control = "temperature_control"
+    spin_speed_control = "spin_speed_control"
+    water_level_control = "water_level_control"
+    detergent_control = "detergent_control"
+    rinse_count = "rinse_count"
+    wash_time_control = "wash_time_control"
+    spin_time_control = "spin_time_control"
+    forget_free = "forget_free"
     stains = "stains"
     dirty_degree = "dirty_degree"
 

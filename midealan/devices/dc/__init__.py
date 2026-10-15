@@ -6,19 +6,8 @@ from typing import Any, ClassVar, Unpack
 
 from midealan.const import DeviceType
 from midealan.device import MideaDevice, MideaDeviceInitKwargs
-from midealan.devices.laundry import STATUS_OFFSET, ControlAttributes
 from midealan.exceptions import ValueWrongType
 
-from .controls import (
-    BASIC_PARAMETER_END,
-    BASIC_PARAMETER_START,
-    PROFILE_MODEL,
-    PROFILE_SUBTYPE,
-    PROGRAMS,
-    STATUS_DELAY,
-    STATUS_START,
-    DCControls,
-)
 from .message import MessageDCResponse, MessagePower, MessageQuery, MessageStart
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,18 +31,6 @@ class DeviceAttributes(StrEnum):
     washing_data = "washing_data"
     progress = "progress"
     time_remaining = "time_remaining"
-    appointment_control_supported = ControlAttributes.appointment_control_supported
-    appointment_controls_available = ControlAttributes.appointment_controls_available
-    appointment = ControlAttributes.appointment
-    appointment_finish = ControlAttributes.appointment_finish
-    parameter_control_supported = ControlAttributes.parameter_control_supported
-    parameter_controls_available = ControlAttributes.parameter_controls_available
-    program_control = ControlAttributes.program_control
-    temperature_control = ControlAttributes.temperature_control
-    dryness_control = ControlAttributes.dryness_control
-    sterilize = ControlAttributes.sterilize
-    anti_wrinkle = ControlAttributes.anti_wrinkle
-    timed_extra = ControlAttributes.timed_extra
 
 
 class MideaDCDevice(MideaDevice):
@@ -154,19 +131,6 @@ class MideaDCDevice(MideaDevice):
             },
         )
 
-        self._controls = (
-            DCControls()
-            if self.subtype == PROFILE_SUBTYPE
-            and PROFILE_MODEL in (self.model, self.sn8)
-            else None
-        )
-        if self._controls is not None:
-            self._attributes.update(self._controls.attributes)
-
-    def get_parameter_options(self, attr: str) -> list[str]:
-        """Return verified model options, including actual-minute time choices."""
-        return self._controls.options(attr) if self._controls is not None else []
-
     def build_query(self) -> list[MessageQuery]:
         """Midea DC device build query."""
         return [MessageQuery(self._message_protocol_version)]
@@ -204,45 +168,15 @@ class MideaDCDevice(MideaDevice):
                 # parse program
                 elif status == DeviceAttributes.program:
                     self._attributes[DeviceAttributes.program] = (
-                        self._program | PROGRAMS
-                        if self._controls is not None
-                        else self._program
-                    ).get(value, value)
+                        MideaDCDevice._program.get(value, value)
+                    )
                 else:
                     self._attributes[status] = getattr(message, str(status))
                 new_status[str(status)] = self._attributes[status]
-        if self._controls is not None and hasattr(message, "washing_data"):
-            controls = self._controls.update(message.body)
-            self._attributes[DeviceAttributes.start] = message.body[STATUS_OFFSET] in (
-                STATUS_START,
-                STATUS_DELAY,
-            )
-            new_status[DeviceAttributes.start] = self._attributes[
-                DeviceAttributes.start
-            ]
-            self._attributes[DeviceAttributes.time_remaining] = (
-                self._controls.remaining_minutes()
-            )
-            new_status[DeviceAttributes.time_remaining] = self._attributes[
-                DeviceAttributes.time_remaining
-            ]
-            self._attributes.update(controls)
-            new_status.update({str(attr): value for attr, value in controls.items()})
         return new_status
 
     def set_attribute(self, attr: str, value: bool | float | str) -> None:
         """Midea DC device set attribute."""
-        if self._controls is not None and self._controls.supports(attr):
-            message_set = self._controls.make_message(
-                attr,
-                value,
-                self._message_protocol_version,
-            )
-            if attr == DeviceAttributes.appointment and value is False:
-                self.build_send(MessageStart(self._message_protocol_version))
-            self.build_send(message_set)
-            self.build_send(MessageQuery(self._message_protocol_version))
-            return
         if not isinstance(value, bool):
             raise ValueWrongType("[dc] Expected bool")
         message: MessagePower | MessageStart | None = None
@@ -253,13 +187,7 @@ class MideaDCDevice(MideaDevice):
         elif attr == DeviceAttributes.start:
             message = MessageStart(self._message_protocol_version)
             message.start = value
-            message.washing_data = (
-                bytearray(
-                    self._controls.body[BASIC_PARAMETER_START:BASIC_PARAMETER_END],
-                )
-                if self._controls is not None and self._controls.body
-                else self._attributes[DeviceAttributes.washing_data]
-            )
+            message.washing_data = self._attributes[DeviceAttributes.washing_data]
             self.build_send(message)
 
 

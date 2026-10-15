@@ -9,8 +9,6 @@ from midealan.message import (
     MessageType,
 )
 
-MINIMUM_STATUS_LENGTH = 30
-
 
 class MessageDCBase(MessageRequest):
     """DC message base."""
@@ -124,16 +122,8 @@ class MessageDCResponse(MessageResponse):
     def __init__(self, message: bytes) -> None:
         """Initialize DC message response."""
         super().__init__(bytearray(message))
-        if (
-            len(super().body) >= MINIMUM_STATUS_LENGTH
-            and super().body[1] in (0, 1)
-            and (
-                self.message_type in [MessageType.query, MessageType.set]
-                or (
-                    self.message_type == MessageType.notify1
-                    and self.body_type == ListTypes.X04
-                )
-            )
+        if self.message_type in [MessageType.query, MessageType.set] or (
+            self.message_type == MessageType.notify1 and self.body_type == ListTypes.X04
         ):
             self.set_body(DCGeneralMessageBody(super().body))
         self.set_attr()
