@@ -36,6 +36,12 @@ TEA_BAR_MAX_KEEP_WARM_HOURS = 12.0
 TEA_BAR_DEFAULT_KEEP_WARM_HOURS = 12.0
 TEA_BAR_MODEL = "63000622"
 
+# cur_quantify faucet gear value domain: 0 selects the continuous mode,
+# 21-25 select the preset slots that quantify_21..quantify_25 define.
+CUR_QUANTIFY_CONTINUOUS = 0
+CUR_QUANTIFY_MIN_SLOT = 21
+CUR_QUANTIFY_MAX_SLOT = 25
+
 
 class DeviceAttributes(StrEnum):
     """Midea ED device attributes."""
@@ -481,6 +487,24 @@ class MideaEDDevice(MideaDevice):
             )
             raise ValueError(msg)
 
+    @staticmethod
+    def _validate_cur_quantify(value: bool | float | str) -> None:
+        """Validate a requested faucet gear independently of observed capability."""
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueWrongType("[ed] Expected int")
+        if isinstance(value, float) and not value.is_integer():
+            msg = "cur_quantify must be a whole number"
+            raise ValueError(msg)
+        if value != CUR_QUANTIFY_CONTINUOUS and not (
+            CUR_QUANTIFY_MIN_SLOT <= value <= CUR_QUANTIFY_MAX_SLOT
+        ):
+            msg = (
+                "cur_quantify must be "
+                f"{CUR_QUANTIFY_CONTINUOUS} (continuous) or a preset slot "
+                f"{CUR_QUANTIFY_MIN_SLOT}-{CUR_QUANTIFY_MAX_SLOT}"
+            )
+            raise ValueError(msg)
+
     def set_attribute(self, attr: str, value: bool | float | str) -> None:
         """Midea ED device set attribute."""
         if self._set_tea_bar_attribute(attr, value):
@@ -491,6 +515,16 @@ class MideaEDDevice(MideaDevice):
             DeviceAttributes.heat,
         ] and not isinstance(value, bool):
             raise ValueWrongType("[ed] Expected bool")
+        if attr == DeviceAttributes.cur_quantify:
+            self._validate_cur_quantify(value)
+            # A non-None value records an observed gear report, including zero.
+            # Do not infer capability from the initialized attribute alone.
+            if self._attributes.get(DeviceAttributes.cur_quantify) is None:
+                _LOGGER.debug(
+                    "[%s] Ignoring cur_quantify write: no gear report observed",
+                    self.device_id,
+                )
+                return
         message: MessageNewSet | MessageOldSet | None = None
         if self._use_new_set():
             if attr in [
@@ -499,6 +533,7 @@ class MideaEDDevice(MideaDevice):
                 DeviceAttributes.wash,
                 DeviceAttributes.antifreeze,
                 DeviceAttributes.heat,
+                DeviceAttributes.cur_quantify,
                 DeviceAttributes.soften,
                 DeviceAttributes.cl_sterilization,
                 DeviceAttributes.leak_water_protection,
@@ -515,7 +550,10 @@ class MideaEDDevice(MideaDevice):
         else:
             message = MessageOldSet(self._message_protocol_version)
         if message is not None:
-            self._attributes[attr] = value
+            # A requested faucet gear is not necessarily accepted by the device.
+            # Keep its last reported value until process_message receives a status.
+            if attr != DeviceAttributes.cur_quantify:
+                self._attributes[attr] = value
             setattr(message, str(attr), value)
             if (
                 attr == DeviceAttributes.wash

@@ -27,6 +27,16 @@ from .message import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# RSJ000CB reports some auxiliary sensors as half-degree raw bytes while
+# target/current/min/max stay direct. Lua only identifies the raw fields;
+# T5/T4 offsets come from midea_ac_lan#586, and T3 was added after
+# midea-lan#197 real-device review showed raw 66 maps plausibly to 18 C.
+OLD_PROTOCOL_TEMPERATURE_OFFSET = 30.0
+OLD_PROTOCOL_TEMPERATURE_DIVISOR = 2.0
+MIXED_SENSOR_TEMPERATURE_OFFSET = 30.0  # T5U/body[5], T5L/body[6], T3/body[7]
+MIXED_OUTDOOR_TEMPERATURE_OFFSET = 50.0  # T4/body[8]
+MIXED_SENSOR_TEMPERATURE_DIVISOR = 2.0
+
 
 class CDSubType(IntEnum):
     """CD Device sub type."""
@@ -132,6 +142,8 @@ class DeviceAttributes(StrEnum):
 
 class MideaCDDevice(MideaDevice):
     """Midea CD device."""
+
+    _mixed_temperature_models: ClassVar[set[str]] = {"RSJ000CB"}
 
     _modes: ClassVar[dict[int, str]] = {
         0x00: "none",
@@ -268,12 +280,19 @@ class MideaCDDevice(MideaDevice):
         # fahrenheit to celsius
         if self._fahrenheit or force_fahrenheit:
             return self.fahrenheit_to_celsius(value, True if force_fahrenheit else None)
-        # celsius
-        # old protocol
+        # celsius old protocol
         if self._lua_protocol == LuaProtocol.old or force_old:
-            return round((value - 30.0) / 2)
+            return round(
+                (value - OLD_PROTOCOL_TEMPERATURE_OFFSET)
+                / OLD_PROTOCOL_TEMPERATURE_DIVISOR,
+            )
         # new protocol
         return value
+
+    @staticmethod
+    def _mixed_temperature_value(value: float, offset: float) -> float:
+        """Decode a half-degree sensor value with its field-specific offset."""
+        return (value - offset) / MIXED_SENSOR_TEMPERATURE_DIVISOR
 
     def _temperature_to_value(self, value: float) -> float:
         # celsius to fahrenheit
@@ -282,7 +301,10 @@ class MideaCDDevice(MideaDevice):
         # celsius
         # old protocol
         if self._lua_protocol == LuaProtocol.old:
-            return round(value * 2 + 30.0)
+            return round(
+                value * OLD_PROTOCOL_TEMPERATURE_DIVISOR
+                + OLD_PROTOCOL_TEMPERATURE_OFFSET,
+            )
         # new protocol
         return value
 
@@ -447,6 +469,29 @@ class MideaCDDevice(MideaDevice):
                         new_status[str(attr)] = mode_str
                     # Skip unknown values; the next device status notification
                     # will correct the mode.
+                    continue
+                # MessageCDResponse keeps the 0xCD body bytes raw. RSJ000CB
+                # then applies empirical scaling only for validated sensors:
+                # T5U/body[5]/top, T5L/body[6]/bottom, and T3/body[7]/
+                # condenser use (raw-30)/2; T4/body[8]/outdoor uses
+                # (raw-50)/2. This intentionally differs from the Lua file,
+                # which has field names but no scaling formula. TP/body[9]/
+                # compressor stays on the generic path until matched C01/raw
+                # data confirms a separate RSJ000CB conversion.
+                if self.model in self._mixed_temperature_models and attr in [
+                    DeviceAttributes.top_temperature,
+                    DeviceAttributes.bottom_temperature,
+                    DeviceAttributes.condenser_temperature,
+                    DeviceAttributes.outdoor_temperature,
+                ]:
+                    offset = (
+                        MIXED_OUTDOOR_TEMPERATURE_OFFSET
+                        if attr == DeviceAttributes.outdoor_temperature
+                        else MIXED_SENSOR_TEMPERATURE_OFFSET
+                    )
+                    parsed = self._mixed_temperature_value(raw_value, offset)
+                    self._attributes[attr] = parsed
+                    new_status[str(attr)] = parsed
                     continue
                 # process temperature family
                 if attr in [

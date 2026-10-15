@@ -144,6 +144,7 @@ class NewSetTags(IntEnum):
     wash = 0x0300  # setbytes(0x00, 0x03, 0x01/0x00, seconds...)
     antifreeze = 0x0503  # setbytes(0x03, 0x05, 0x01/0x00)
     heat = 0x0400  # setbytes(0x00, 0x04, 0x01/0x00)
+    cur_quantify = 0x020D  # setbytes(0x0D, 0x02, value, 0x00, 0x00)
 
 
 class EDNewSetParamPack:
@@ -399,6 +400,7 @@ class MessageNewSet(MessageEDBase):
         self.wash_seconds: int | None = None
         self.antifreeze: bool | None = None
         self.heat: bool | None = None
+        self.cur_quantify: int | None = None
 
     @property
     def _body(self) -> bytearray:
@@ -596,6 +598,14 @@ class MessageNewSet(MessageEDBase):
                 EDNewSetParamPack.pack(
                     param=NewSetTags.heat,
                     value=0x01 if self.heat else 0x00,
+                ),
+            )
+        if self.cur_quantify is not None:
+            pack_count += 1
+            payload.extend(
+                EDNewSetParamPack.pack(
+                    param=NewSetTags.cur_quantify,
+                    value=self.cur_quantify,
                 ),
             )
         return pack_count

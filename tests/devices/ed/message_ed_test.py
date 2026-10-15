@@ -391,6 +391,20 @@ class TestMessageNewSet:
             [0x15, 0x01, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00],
         )
 
+    def test_message_newset_water_purifier_cur_quantify(self) -> None:
+        """Test MessageNewSet faucet gear uses the official Lua encoding."""
+        new_set = MessageNewSet(protocol_version=ProtocolVersion.V1)
+        new_set.cur_quantify = 22
+        # Gear slot 22 (0.5 L): setbytes(0x0D, 0x02, 0x16, 0x00, 0x00).
+        assert new_set.body == bytearray(
+            [0x15, 0x01, 0x01, 0x0D, 0x02, 0x16, 0x00, 0x00],
+        )
+        new_set.cur_quantify = 0
+        # Continuous mode: setbytes(0x0D, 0x02, 0x00, 0x00, 0x00).
+        assert new_set.body == bytearray(
+            [0x15, 0x01, 0x01, 0x0D, 0x02, 0x00, 0x00, 0x00],
+        )
+
 
 class TestMessageOldSet:
     """Test MessageOldSet."""
