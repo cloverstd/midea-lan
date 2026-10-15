@@ -29,7 +29,6 @@ MINUTES_PER_DAY = 1440
 SECONDS_PER_MINUTE = 60
 START_COMMAND = 1
 PAUSE_COMMAND = 0
-STATUS_RUNNING_PAUSED = 3
 
 type ControlValue = bool | int | str | None
 
@@ -415,12 +414,8 @@ class DBControls:
         return bool(
             self.body
             and self.body[POWER_OFFSET] == 1
-            and self.appointment_enabled() is not None
             and (
-                (
-                    self.is_editable()
-                    and self.body[STATUS_OFFSET] != STATUS_RUNNING_PAUSED
-                )
+                self.is_editable()
                 or (
                     self.body[STATUS_OFFSET] in self.appointment_statuses
                     and self.appointment_enabled() is True
