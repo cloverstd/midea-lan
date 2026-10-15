@@ -519,7 +519,10 @@ class DCControls:
         # Combining pause with these fields makes the device ignore the clear.
         body[STATUS_OFFSET] = START_COMMAND if enabled else UNCHANGED
         body[APPOINTMENT_REPORT_OFFSET] = APPOINTMENT_ON if enabled else APPOINTMENT_OFF
-        body[APPOINTMENT_TIME_OFFSET:APPOINTMENT_TIME_END] = wait.to_bytes(2, "little")
+        body[APPOINTMENT_TIME_OFFSET:APPOINTMENT_TIME_END] = wait.to_bytes(
+            APPOINTMENT_TIME_END - APPOINTMENT_TIME_OFFSET,
+            "little",
+        )
         return body
 
     def feature(self, offset: int) -> bool | None:
@@ -579,7 +582,10 @@ class DCControls:
             if not 0 <= extra <= TIMED_EXTRA_MAX or extra % TIMED_EXTRA_STEP:
                 raise ValueError("Timed extra must be 0..170 minutes in steps of 10")
             body = parameter_body()
-            body[DRY_TIME_OFFSET:DRY_TIME_END] = extra.to_bytes(2, "little")
+            body[DRY_TIME_OFFSET:DRY_TIME_END] = extra.to_bytes(
+                DRY_TIME_END - DRY_TIME_OFFSET,
+                "little",
+            )
             return body
         return self._encode(attr, value)
 
