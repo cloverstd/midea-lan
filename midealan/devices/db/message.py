@@ -578,7 +578,10 @@ class DBControls:
         body[APPOINTMENT_REPORT_OFFSET] = self.body[
             APPOINTMENT_REPORT_OFFSET
         ] & ~APPOINTMENT_REPORT_MASK | (APPOINTMENT_REPORT_MASK if enabled else 0)
-        body[APPOINTMENT_TIME_OFFSET:APPOINTMENT_TIME_END] = wait.to_bytes(2, "little")
+        body[APPOINTMENT_TIME_OFFSET:APPOINTMENT_TIME_END] = wait.to_bytes(
+            APPOINTMENT_TIME_END - APPOINTMENT_TIME_OFFSET,
+            "little",
+        )
         body[V2_CONTROL_OFFSET] = V2_CONTROL_VERSION
         body[APPOINTMENT_CONTROL_OFFSET] = (
             APPOINTMENT_ON if enabled else APPOINTMENT_OFF
