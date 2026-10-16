@@ -105,6 +105,22 @@ def test_generic_lua_controls_are_available_without_profile_identity() -> None:
 
 
 @pytest.mark.parametrize(
+    ("attribute", "value"),
+    [(Attr.temperature_control, "low"), (Attr.timed_extra, 10)],
+)
+def test_generic_profile_cannot_encode_unverified_extensions(
+    attribute: Attr,
+    value: str | int,
+) -> None:
+    """Generic encoders reject extensions even when called without device dispatch."""
+    controls = DCControls(profile=False)
+    controls.update(bytearray(DC_BODY))
+    assert controls.options(attribute) == []
+    with pytest.raises(ValueError, match="unavailable in the current profile"):
+        controls.encode(attribute, value)
+
+
+@pytest.mark.parametrize(
     ("attribute", "offset"),
     [(Attr.anti_wrinkle, 12), (Attr.sterilize, 13)],
 )

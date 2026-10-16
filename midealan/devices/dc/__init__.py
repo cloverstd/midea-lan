@@ -224,6 +224,8 @@ class MideaDCDevice(MideaDevice):
                 ]
                 self._attributes[DeviceAttributes.time_remaining] = (
                     self._controls.remaining_minutes()
+                    if self._attributes[DeviceAttributes.power]
+                    else None
                 )
                 new_status[DeviceAttributes.time_remaining] = self._attributes[
                     DeviceAttributes.time_remaining

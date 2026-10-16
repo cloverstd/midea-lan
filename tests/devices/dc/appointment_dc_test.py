@@ -216,6 +216,36 @@ def test_dryer_verified_duration_above_255_uses_minutes_not_hours() -> None:
     assert dryer(report).get_attribute("time_remaining") == 300
 
 
+@pytest.mark.parametrize("profile", [False, True])
+@pytest.mark.parametrize("retained_minutes", [0, 90, 300])
+def test_power_off_clears_duration_until_power_returns(
+    profile: bool,
+    retained_minutes: int,
+) -> None:
+    """Off reports clear stale durations in both entity state and update events."""
+    device = dryer() if profile else MideaDCDevice(customize="", **BASE_ARGS)
+    report = bytearray(DC_BODY)
+    report[1:3] = bytes([1, 1])
+    report[17:19] = (300).to_bytes(2, "little")
+    powered_duration = 300 if profile else 104
+    update = device.process_message(frame(report))
+    assert device.get_attribute("time_remaining") == powered_duration
+    assert update["time_remaining"] == powered_duration
+
+    report[1] = 0
+    report[17:19] = retained_minutes.to_bytes(2, "little")
+    update = device.process_message(frame(report))
+    assert device.get_attribute("power") is False
+    assert device.get_attribute("time_remaining") is None
+    assert update["time_remaining"] is None
+
+    report[1] = 1
+    report[17:19] = (300).to_bytes(2, "little")
+    update = device.process_message(frame(report))
+    assert device.get_attribute("time_remaining") == powered_duration
+    assert update["time_remaining"] == powered_duration
+
+
 def test_unsupported_reservation_flag_is_read_only() -> None:
     """Unknown reservation codes must not be treated as off."""
     report = bytearray(DC_BODY)
