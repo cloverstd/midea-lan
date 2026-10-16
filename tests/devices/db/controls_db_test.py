@@ -8,6 +8,7 @@ from midealan.const import ProtocolVersion
 from midealan.device import MideaDeviceInitKwargs
 from midealan.devices.db import MideaDBDevice
 from midealan.devices.db.message import ControlAttributes as Attr
+from midealan.devices.db.message import DBControls
 from midealan.exceptions import ValueWrongType
 from midealan.message import MessageType
 
@@ -252,3 +253,56 @@ def test_unverified_38132386_does_not_inherit_v2_controls() -> None:
     assert Attr.parameter_control_supported not in device.attributes
     assert Attr.appointment_control_supported not in device.attributes
     assert device.get_parameter_options(Attr.program_control) == []
+
+
+def test_integral_numeric_select_encodes_without_decimal_suffix() -> None:
+    """Numeric clients may supply whole-number selects as floats."""
+    device = washer()
+    with patch.object(device, "build_send") as send:
+        device.set_attribute(Attr.temperature_control, 20.0)
+    expected = bytearray([2] + [255] * 21)
+    expected[7] = 2
+    assert send.call_args_list[0].args[0].body == expected
+    assert send.call_args_list[1].args[0].body == b"\x03"
+
+
+@pytest.mark.parametrize("report", [b"", DB_BODY[:30], bytes([2]) + DB_BODY[1:]])
+def test_invalid_reports_preserve_control_snapshot(report: bytes) -> None:
+    """Truncated reports and acknowledgements cannot replace valid state."""
+    controls = DBControls()
+    before = controls.update(bytearray(DB_BODY))
+    assert controls.update(bytearray(report)) == {}
+    assert controls.body == DB_BODY
+    assert controls.attributes == before
+
+
+def test_options_before_first_report_do_not_invent_minutes() -> None:
+    """Capabilities alone cannot provide writable time or temperature choices."""
+    controls = DBControls()
+    assert controls.options(Attr.wash_time_control) == []
+    assert controls.options(Attr.spin_time_control) == []
+    assert controls.options(Attr.temperature_control) == []
+    assert controls.options(Attr.forget_free) == []
+
+
+@pytest.mark.parametrize(
+    ("request_code", "minutes"),
+    [(5, 45), (255, 45), (0, 0), (0, 254), (0, 255), (0, 3)],
+)
+def test_invalid_minute_reports_disable_time_writes(
+    request_code: int,
+    minutes: int,
+) -> None:
+    """Unknown request codes, sentinels and nonpositive options stay read-only."""
+    device = washer()
+    report = bytearray(DB_BODY)
+    report[9], report[27] = request_code, minutes
+    device.process_message(frame(report))
+    assert device.get_attribute(Attr.wash_time_control) is None
+    assert device.get_parameter_options(Attr.wash_time_control) == []
+    with (
+        patch.object(device, "build_send") as send,
+        pytest.raises(ValueError, match="unavailable"),
+    ):
+        device.set_attribute(Attr.wash_time_control, "45")
+    send.assert_not_called()
