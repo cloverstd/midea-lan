@@ -36,6 +36,7 @@ type ControlValue = bool | int | str | None
 # Verified DB v33 only: other 0x0000 Lua versions differ in field mappings,
 # while 0x0008 variants use different frames and offsets. Verify each profile
 # before enabling these 22/54-byte commands for another model or subtype.
+# Protocol reference: wuwentao/midea-lua, lua/0xDB/T_0000_DB_33.lua.
 PROFILE_MODEL = "38131140"
 PROFILE_SUBTYPE = 13145
 STATUS_IDLE = 0
@@ -55,9 +56,14 @@ SPIN_REQUEST_OFFSET = 10
 WASH_MINUTES_OFFSET = 27
 SPIN_MINUTES_OFFSET = 28
 MINUTE_SENTINEL = 254
+# Request codes select adjustments to the program's default, not minutes.
+# Mixed wash reports 42/45/50/55/60 minutes cold, but 11/14/19/24/29 at 30 C;
+# derive that default from the current request and actual-minute report.
 WASH_MINUTE_OFFSETS = (0, 5, 10, 15, -3)
+# Measured 8/9/10/11/12-minute spin options map to request codes 3/4/0/1/2.
 SPIN_MINUTE_OFFSETS = (0, 1, 2, -2, -1)
 FRESH_STATUS_LENGTH = 56
+# Forget-free is fresh_anion_switch, not the legacy wind_dispel flag.
 FRESH_REPORT_OFFSET = 55
 FRESH_REPORT_MASK = 0x20
 FRESH_BODY_LENGTH = 54
@@ -414,6 +420,8 @@ class DBControls:
 
     def _appointment_available(self) -> bool:
         """Allow reservation changes in standby or an existing reservation only."""
+        # A queued reservation blocks ordinary parameter writes, but its
+        # deadline and cancellation must remain independently editable.
         return bool(
             self.body
             and self.body[POWER_OFFSET] == 1
@@ -568,6 +576,9 @@ class DBControls:
 
     def encode_appointment(self, *, enabled: bool, wait: int) -> bytearray:
         """Register/cancel atomically, preserving the complete cloud program."""
+        # Cancellation must pause AND clear the flag/wait in the same command:
+        # clearing only the wait could start the selected cycle immediately.
+        # V2 needs both the legacy flag and the byte-35 control field below.
         body = parameter_body(FRESH_BODY_LENGTH)
         body[BASIC_PARAMETER_START:BASIC_PARAMETER_END] = self.body[
             BASIC_PARAMETER_START:BASIC_PARAMETER_END
@@ -584,6 +595,8 @@ class DBControls:
         body[APPOINTMENT_CONTROL_OFFSET] = (
             APPOINTMENT_ON if enabled else APPOINTMENT_OFF
         )
+        # FF is not "unchanged" for these selectors: preserve the real report
+        # to avoid resetting the selected program's temperature/time presets.
         body[CLOUD_PROGRAM_START:CLOUD_PROGRAM_END] = self.body[
             CLOUD_PROGRAM_START:CLOUD_PROGRAM_END
         ]
@@ -644,11 +657,15 @@ class DBControls:
             return body
         body = self._encode(attr, value)
         if attr == ControlAttributes.rinse_count:
+            # Only the upper nibble is rinse count; F preserves the drying flag.
             body[RINSE_OFFSET] = body[RINSE_OFFSET] << NIBBLE_SHIFT | KEEP_DRYER_NIBBLE
         return body
 
     def encode_fresh(self, value: bool | float | str) -> bytearray:
         """Use fresh_anion_switch, retaining complete parameters and cloud cycle."""
+        # The full V2 frame preserves basic parameters and cloud selectors.
+        # On-device toggles retained both default and custom 60/12-minute
+        # wash/spin selections; verification never executed a washing cycle.
         if not isinstance(value, bool):
             raise ValueWrongType("Forget-free requires bool")
         body = parameter_body(FRESH_BODY_LENGTH)
