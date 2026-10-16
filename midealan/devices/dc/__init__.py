@@ -13,7 +13,6 @@ from .message import (
     BASIC_PARAMETER_START,
     PROFILE_MODEL,
     PROFILE_SUBTYPE,
-    PROGRAMS,
     STATUS_DELAY,
     STATUS_OFFSET,
     STATUS_START,
@@ -157,17 +156,17 @@ class MideaDCDevice(MideaDevice):
             },
         )
 
-        self._controls = (
-            DCControls()
-            if self.subtype == PROFILE_SUBTYPE
-            and PROFILE_MODEL in (self.model, self.sn8)
-            else None
+        profile = self.subtype == PROFILE_SUBTYPE and PROFILE_MODEL in (
+            self.model,
+            self.sn8,
         )
-        if self._controls is not None:
-            self._attributes.update(self._controls.attributes)
+        # The Lua 0xDC protocol confirms generic program, feature, and
+        # appointment fields; only the extended profile fields remain gated.
+        self._controls = DCControls(profile=profile)
+        self._attributes.update(self._controls.attributes)
 
     def get_parameter_options(self, attr: str) -> list[str]:
-        """Return verified model options, including actual-minute time choices."""
+        """Return active protocol options, including profile-specific choices."""
         return self._controls.options(attr) if self._controls is not None else []
 
     def build_query(self) -> list[MessageQuery]:
@@ -207,7 +206,7 @@ class MideaDCDevice(MideaDevice):
                 # parse program
                 elif status == DeviceAttributes.program:
                     self._attributes[DeviceAttributes.program] = (
-                        self._program | PROGRAMS
+                        self._controls.programs
                         if self._controls is not None
                         else self._program
                     ).get(value, value)
@@ -216,20 +215,19 @@ class MideaDCDevice(MideaDevice):
                 new_status[str(status)] = self._attributes[status]
         if self._controls is not None and hasattr(message, "washing_data"):
             controls = self._controls.update(message.body)
-            self._attributes[DeviceAttributes.start] = message.body[STATUS_OFFSET] in (
-                STATUS_START,
-                STATUS_DELAY,
-                STATUS_OFFSET,
-            )
-            new_status[DeviceAttributes.start] = self._attributes[
-                DeviceAttributes.start
-            ]
-            self._attributes[DeviceAttributes.time_remaining] = (
-                self._controls.remaining_minutes()
-            )
-            new_status[DeviceAttributes.time_remaining] = self._attributes[
-                DeviceAttributes.time_remaining
-            ]
+            if self._controls.profile:
+                self._attributes[DeviceAttributes.start] = message.body[
+                    STATUS_OFFSET
+                ] in (STATUS_START, STATUS_DELAY)
+                new_status[DeviceAttributes.start] = self._attributes[
+                    DeviceAttributes.start
+                ]
+                self._attributes[DeviceAttributes.time_remaining] = (
+                    self._controls.remaining_minutes()
+                )
+                new_status[DeviceAttributes.time_remaining] = self._attributes[
+                    DeviceAttributes.time_remaining
+                ]
             self._attributes.update(controls)
             new_status.update({str(attr): value for attr, value in controls.items()})
         return new_status

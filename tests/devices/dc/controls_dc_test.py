@@ -64,26 +64,65 @@ def test_profile_identity_and_legacy_isolation(
     model: str,
     subtype: int,
 ) -> None:
-    """Require model and subtype; unrelated devices keep legacy behavior."""
+    """Expose Lua-confirmed controls broadly and gate only profile extensions."""
     for wrong_model, wrong_subtype in [("other", subtype), (model, subtype + 1)]:
         device = cls(
             customize="",
             **dict(BASE_ARGS, model=wrong_model, subtype=wrong_subtype),
         )
-        assert Attr.parameter_control_supported not in device.attributes
-        assert device.get_parameter_options(Attr.program_control) == []
+        assert device.get_attribute(Attr.parameter_control_supported) is True
+        assert len(device.get_parameter_options(Attr.program_control)) == 50
+        assert Attr.temperature_control not in device.attributes
+        assert Attr.dryness_control not in device.attributes
     device = cls(
         customize="",
         **dict(BASE_ARGS, model="marketing name", sn8=model, subtype=subtype),
     )
     assert device.get_attribute(Attr.parameter_control_supported) is True
-    assert device.get_attribute(Attr.parameter_controls_available) is False
+    assert Attr.temperature_control in device.attributes
+    assert Attr.dryness_control in device.attributes
     with (
         patch.object(device, "build_send") as send,
         pytest.raises(ValueError, match=r"standby|unavailable|Timed extra"),
     ):
         device.set_attribute(Attr.program_control, "cotton")
     send.assert_not_called()
+
+
+def test_generic_lua_controls_are_available_without_profile_identity() -> None:
+    """Generic Lua fields use the complete protocol program table."""
+    device = MideaDCDevice(customize="", **BASE_ARGS)
+    report = bytearray(DC_BODY)
+    report[0:3] = bytes([3, 1, 1])
+    device.process_message(frame(report))
+    assert device.get_parameter_options(Attr.program_control)[1] == "fiber"
+    assert device.get_parameter_options(Attr.program_control)[49] == "sterilize"
+    assert device.get_attribute(Attr.anti_wrinkle) is False
+    assert device.get_attribute(Attr.sterilize) is False
+    with patch.object(device, "build_send") as send:
+        device.set_attribute(Attr.program_control, "fiber")
+    assert send.call_args_list[0].args[0].body[4] == 1
+
+
+@pytest.mark.parametrize(
+    ("attribute", "offset"),
+    [(Attr.anti_wrinkle, 12), (Attr.sterilize, 13)],
+)
+def test_generic_feature_packets_follow_lua_bitfields(
+    attribute: str,
+    offset: int,
+) -> None:
+    """Generic feature writes use the Lua two-bit masks."""
+    device = MideaDCDevice(customize="", **BASE_ARGS)
+    report = bytearray(DC_BODY)
+    report[0:3] = bytes([3, 1, 1])
+    device.process_message(frame(report))
+    with patch.object(device, "build_send") as send:
+        device.set_attribute(attribute, True)
+    body = send.call_args_list[0].args[0].body
+    assert body[offset] == 247
+    if attribute == Attr.sterilize:
+        assert body[11] == 255
 
 
 @pytest.mark.parametrize(

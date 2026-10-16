@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import ClassVar, NamedTuple
+from typing import NamedTuple
 
 from midealan.const import DeviceType
 from midealan.exceptions import ValueWrongType
@@ -100,7 +100,59 @@ class ParameterField(NamedTuple):
     options: dict[int, str]
 
 
-PROGRAMS = {
+GENERIC_PROGRAMS = {
+    0: "cotton",
+    1: "fiber",
+    2: "mixed_wash",
+    3: "jean",
+    4: "bedsheet",
+    5: "outdoor",
+    6: "down_jacket",
+    7: "plush",
+    8: "wool",
+    9: "dehumidify",
+    10: "cold_air_fresh_air",
+    11: "hot_air_dry",
+    12: "sport_clothes",
+    13: "underwear",
+    14: "baby_clothes",
+    15: "shirt",
+    16: "standard",
+    17: "quick_dry",
+    18: "fresh_air",
+    19: "low_temp_dry",
+    20: "eco_dry",
+    21: "quick_dry_30",
+    22: "towel",
+    23: "intelligent_dry",
+    24: "steam_care",
+    25: "big",
+    26: "fixed_time_dry",
+    27: "night_dry",
+    28: "bracket_dry",
+    29: "western_trouser",
+    30: "dehumidification",
+    31: "smart_dry",
+    32: "four_piece_suit",
+    33: "warm_clothes",
+    34: "quick_dry_20",
+    35: "steam_sterilize",
+    36: "enzyme",
+    37: "big_60",
+    38: "steam_no_iron",
+    39: "air_wash",
+    40: "bed_clothes",
+    41: "little_fast_dry",
+    42: "small_piece_dry",
+    43: "big_dry",
+    44: "wool_nurse",
+    45: "sun_quilt",
+    46: "fresh_remove_smell",
+    47: "bucket_self_clean",
+    48: "silk",
+    49: "sterilize",
+}
+PROFILE_PROGRAMS = {
     2: "mixed_wash",
     8: "wool",
     27: "night_dry",
@@ -315,24 +367,36 @@ class DCControls:
         STATUS_PREVENT_WRINKLE_END,
     )
     appointment_statuses = (STATUS_DELAY_CHOOSING, STATUS_DELAY, STATUS_DELAY_PAUSE)
-    fields: ClassVar[dict[ControlAttributes, ParameterField]] = {
-        ControlAttributes.program_control: ParameterField(PROGRAM_OFFSET, PROGRAMS),
-        ControlAttributes.dryness_control: ParameterField(
-            DRYNESS_OFFSET,
-            {DRYNESS_READY_TO_WEAR: "ready_to_wear", DRYNESS_STORAGE: "storage"},
-        ),
-    }
-    attribute_keys = (
-        *fields,
-        ControlAttributes.temperature_control,
-        ControlAttributes.sterilize,
-        ControlAttributes.anti_wrinkle,
-        ControlAttributes.timed_extra,
-    )
 
-    def __init__(self) -> None:
-        """Start without a fabricated parameter or operational state."""
+    def __init__(self, *, profile: bool = False) -> None:
+        """Start with generic controls and optional verified extensions."""
+        self.profile = profile
         self.body = b""
+        programs = PROFILE_PROGRAMS if profile else GENERIC_PROGRAMS
+        self.fields: dict[ControlAttributes, ParameterField] = {
+            ControlAttributes.program_control: ParameterField(PROGRAM_OFFSET, programs),
+        }
+        if profile:
+            self.fields[ControlAttributes.dryness_control] = ParameterField(
+                DRYNESS_OFFSET,
+                {
+                    DRYNESS_READY_TO_WEAR: "ready_to_wear",
+                    DRYNESS_STORAGE: "storage",
+                },
+            )
+        self.attribute_keys = (
+            *self.fields,
+            ControlAttributes.sterilize,
+            ControlAttributes.anti_wrinkle,
+            *(
+                (
+                    ControlAttributes.temperature_control,
+                    ControlAttributes.timed_extra,
+                )
+                if profile
+                else ()
+            ),
+        )
         self.attributes: dict[ControlAttributes, ControlValue] = dict.fromkeys(
             self.attribute_keys,
         )
@@ -345,6 +409,11 @@ class DCControls:
     def supports(self, attr: str) -> bool:
         """Return whether an attribute is a writable parameter."""
         return attr in (*self.attribute_keys, *APPOINTMENT_ATTRIBUTES)
+
+    @property
+    def programs(self) -> dict[int, str]:
+        """Return the active generic or verified program mapping."""
+        return self.fields[ControlAttributes.program_control].options
 
     def update(self, body: bytearray) -> dict[ControlAttributes, ControlValue]:
         """Replace the snapshot only from complete status/query bodies."""
@@ -537,29 +606,36 @@ class DCControls:
         flag = self.feature(STERILIZE_FLAG_OFFSET)
         mode = self.body[STERILIZE_MODE_OFFSET]
         values[ControlAttributes.sterilize] = (
-            flag if flag is not None and mode == int(flag) else None
-        )
-        values[ControlAttributes.temperature_control] = (
-            TEMPERATURE_OPTIONS.get(self.body[TEMPERATURE_REPORT_OFFSET])
-            if len(self.body) >= EXTENDED_STATUS_LENGTH
-            and self.body[SEASON_REPORT_OFFSET] != UNKNOWN_CODE
-            and values[ControlAttributes.anti_wrinkle] is not None
+            flag
+            if not self.profile
+            else flag
+            if flag is not None and mode == int(flag)
             else None
         )
-        extra = int.from_bytes(self.body[DRY_TIME_OFFSET:DRY_TIME_END], "little")
-        values[ControlAttributes.timed_extra] = (
-            extra
-            if self.body[PROGRAM_OFFSET] == TIMED_PROGRAM
-            and 0 <= extra <= TIMED_EXTRA_MAX
-            and extra % TIMED_EXTRA_STEP == 0
-            else None
-        )
+        if self.profile:
+            values[ControlAttributes.temperature_control] = (
+                TEMPERATURE_OPTIONS.get(self.body[TEMPERATURE_REPORT_OFFSET])
+                if len(self.body) >= EXTENDED_STATUS_LENGTH
+                and self.body[SEASON_REPORT_OFFSET] != UNKNOWN_CODE
+                and values[ControlAttributes.anti_wrinkle] is not None
+                else None
+            )
+            extra = int.from_bytes(self.body[DRY_TIME_OFFSET:DRY_TIME_END], "little")
+            values[ControlAttributes.timed_extra] = (
+                extra
+                if self.body[PROGRAM_OFFSET] == TIMED_PROGRAM
+                and 0 <= extra <= TIMED_EXTRA_MAX
+                and extra % TIMED_EXTRA_STEP == 0
+                else None
+            )
         return values
 
     def options(self, attr: str) -> list[str]:
         """Reflect the real instant-wear constraint when sterilization is on."""
         key = ControlAttributes(attr)
         if key == ControlAttributes.temperature_control:
+            if not self.profile:
+                return []
             return list(TEMPERATURE_OPTIONS.values()) if self.attributes[key] else []
         if key == ControlAttributes.dryness_control:
             if self.attributes.get(key) is None:
@@ -571,10 +647,14 @@ class DCControls:
     def encode(self, attr: ControlAttributes, value: bool | float | str) -> bytearray:
         """Use the independently verified body layout for each parameter."""
         if attr == ControlAttributes.temperature_control:
+            if not self.profile:
+                raise ValueError("This parameter is unavailable in the current profile")
             return self.encode_temperature(value)
         if attr in (ControlAttributes.sterilize, ControlAttributes.anti_wrinkle):
             return self.encode_feature(attr, value)
         if attr == ControlAttributes.timed_extra:
+            if not self.profile:
+                raise ValueError("This parameter is unavailable in the current profile")
             label = option_label(value)
             if not label.isdecimal():
                 raise ValueError("Timed extra must be an integer number of minutes")
@@ -623,7 +703,7 @@ class DCControls:
             else ANTI_WRINKLE_OFFSET
         )
         body[offset] = FEATURE_ON if value else FEATURE_OFF
-        if attr == ControlAttributes.sterilize:
+        if attr == ControlAttributes.sterilize and self.profile:
             body[STERILIZE_MODE_OFFSET] = int(value)
             if value and self.body[DRYNESS_OFFSET] in (
                 DRYNESS_READY_TO_WEAR,
