@@ -17,6 +17,20 @@ DC_RESERVED = bytes.fromhex(
 NOW = datetime(2026, 10, 12, 15, 24, 30, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("value", [True, 1, "true"])
+def test_reservation_requires_a_deadline(value: bool | int | str) -> None:
+    """Enabling the flag alone cannot start an unscheduled automatic cycle."""
+    device = dryer()
+    before = dict(device.attributes)
+    with (
+        patch.object(device, "build_send") as send,
+        pytest.raises(ValueError, match="Use appointment_finish"),
+    ):
+        device.set_attribute(Attr.appointment, value)
+    send.assert_not_called()
+    assert device.attributes == before
+
+
 @pytest.mark.parametrize(
     ("report", "wait", "duration", "status"),
     [(DC_RESERVED, 422, 90, "delay")],

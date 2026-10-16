@@ -8,6 +8,8 @@ from midealan.const import ProtocolVersion
 from midealan.device import MideaDeviceInitKwargs
 from midealan.devices.dc import MideaDCDevice
 from midealan.devices.dc.message import ControlAttributes as Attr
+from midealan.devices.dc.message import DCControls
+from midealan.exceptions import ValueWrongType
 from midealan.message import MessageType
 
 DC_BODY = bytes.fromhex(
@@ -172,3 +174,103 @@ def test_missing_extended_fields_and_short_acknowledgements() -> None:
     assert device.attributes == before
     device.process_message(frame(DC_BODY[:30]))
     assert device.get_attribute(Attr.temperature_control) is None
+
+
+@pytest.mark.parametrize("report", [b"", DC_BODY[:29], bytes([2]) + DC_BODY[1:]])
+def test_invalid_reports_preserve_control_snapshot(report: bytes) -> None:
+    """Truncated reports and acknowledgements cannot replace valid state."""
+    controls = DCControls()
+    before = controls.update(bytearray(DC_BODY))
+    assert controls.update(bytearray(report)) == {}
+    assert controls.body == DC_BODY
+    assert controls.attributes == before
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        (Attr.program_control, True),
+        (Attr.program_control, "unknown"),
+        (Attr.dryness_control, "storage"),
+        (Attr.temperature_control, "high"),
+        (Attr.sterilize, "on"),
+        (Attr.anti_wrinkle, 1),
+    ],
+)
+def test_invalid_parameter_writes_never_send(
+    attribute: str,
+    value: bool | int | str,
+) -> None:
+    """Reject invalid types, options and dryness incompatible with sterilization."""
+    device = dryer()
+    before = dict(device.attributes)
+    with (
+        patch.object(device, "build_send") as send,
+        pytest.raises((ValueError, ValueWrongType)),
+    ):
+        device.set_attribute(attribute, value)
+    send.assert_not_called()
+    assert device.attributes == before
+
+
+def test_unknown_dryness_has_no_options_and_rejects_writes() -> None:
+    """A new unsupported report must clear previously writable dryness."""
+    device = dryer()
+    report = bytearray(DC_BODY)
+    report[1:3] = bytes([1, 1])
+    report[9] = 255
+    device.process_message(frame(report))
+    assert device.get_attribute(Attr.dryness_control) is None
+    assert device.get_parameter_options(Attr.dryness_control) == []
+    assert device.get_parameter_options(Attr.anti_wrinkle) == []
+    with (
+        patch.object(device, "build_send") as send,
+        pytest.raises(ValueError, match="unavailable"),
+    ):
+        device.set_attribute(Attr.dryness_control, "storage")
+    send.assert_not_called()
+
+
+def test_storage_dryness_is_available_with_sterilization_off() -> None:
+    """Only a real disabled sterilization report permits storage dryness."""
+    report = bytearray(DC_BODY)
+    report[1:3] = bytes([1, 1])
+    device = dryer(report)
+    assert device.get_attribute(Attr.sterilize) is False
+    assert device.get_parameter_options(Attr.dryness_control) == [
+        "ready_to_wear",
+        "storage",
+    ]
+    with patch.object(device, "build_send") as send:
+        device.set_attribute(Attr.dryness_control, "storage")
+    expected = bytearray([2] + [255] * 21)
+    expected[9] = 3
+    assert send.call_args_list[0].args[0].body == expected
+
+
+@pytest.mark.parametrize("extra", [True, "bad", -10, 10.5, 15, 180])
+def test_invalid_timed_extension_never_sends(extra: bool | str | float) -> None:
+    """Timed extensions must be integer multiples of ten within the range."""
+    report = bytearray(DC_BODY)
+    report[1:3] = bytes([1, 1])
+    report[4] = 26
+    device = dryer(report)
+    with (
+        patch.object(device, "build_send") as send,
+        pytest.raises((ValueError, ValueWrongType)),
+    ):
+        device.set_attribute(Attr.timed_extra, extra)
+    send.assert_not_called()
+
+
+def test_integral_float_extension_encodes_minutes() -> None:
+    """Whole-number values from numeric clients retain the minute encoding."""
+    report = bytearray(DC_BODY)
+    report[1:3] = bytes([1, 1])
+    report[4] = 26
+    device = dryer(report)
+    with patch.object(device, "build_send") as send:
+        device.set_attribute(Attr.timed_extra, 10.0)
+    expected = bytearray([2] + [255] * 21)
+    expected[5:7] = bytes([10, 0])
+    assert send.call_args_list[0].args[0].body == expected
