@@ -245,7 +245,7 @@ def test_missing_extended_fields_disable_forget_free() -> None:
 
 
 def test_unverified_38132386_does_not_inherit_v2_controls() -> None:
-    """A shared Lua version does not prove this model's extended capabilities."""
+    """DB v41 Lua does not establish compatibility with the verified DB v33 controls."""
     args = BASE_ARGS.copy()
     args["model"], args["subtype"] = "38132386", 0
     device = MideaDBDevice(customize="", **args)

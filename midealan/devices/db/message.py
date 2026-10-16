@@ -33,6 +33,9 @@ PAUSE_COMMAND = 0
 type ControlValue = bool | int | str | None
 
 
+# Verified DB v33 only: other 0x0000 Lua versions differ in field mappings,
+# while 0x0008 variants use different frames and offsets. Verify each profile
+# before enabling these 22/54-byte commands for another model or subtype.
 PROFILE_MODEL = "38131140"
 PROFILE_SUBTYPE = 13145
 STATUS_IDLE = 0
