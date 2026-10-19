@@ -2,13 +2,18 @@
 
 import logging
 from enum import StrEnum
-from typing import Any, ClassVar, Unpack
+from threading import RLock
+from time import monotonic
+from typing import Any, ClassVar, NamedTuple, Unpack, cast
 
 from midealan.const import DeviceType
 from midealan.device import MideaDevice, MideaDeviceInitKwargs
 from midealan.exceptions import ValueWrongType
+from midealan.message import MessageType
 
 from .message import (
+    APPOINTMENT_TIME_END,
+    APPOINTMENT_TIME_OFFSET,
     BASIC_PARAMETER_END,
     BASIC_PARAMETER_START,
     PROFILE_MODEL,
@@ -16,14 +21,28 @@ from .message import (
     STATUS_DELAY,
     STATUS_OFFSET,
     STATUS_START,
+    UNCHANGED,
     DCControls,
     MessageDCResponse,
+    MessageParameters,
     MessagePower,
     MessageQuery,
     MessageStart,
 )
 
 _LOGGER = logging.getLogger(__name__)
+APPOINTMENT_CONFIRMATION_TIMEOUT = 15
+APPOINTMENT_WAIT_TOLERANCE = 1
+
+
+class _PendingAppointment(NamedTuple):
+    """A deadline that may start only after its prepared fields are confirmed."""
+
+    target: str
+    wait: int
+    duration: int
+    parameters: bytes
+    expires: float
 
 
 class DeviceAttributes(StrEnum):
@@ -164,6 +183,8 @@ class MideaDCDevice(MideaDevice):
         # appointment fields; only the extended profile fields remain gated.
         self._controls = DCControls(profile=profile)
         self._attributes.update(self._controls.attributes)
+        self._appointment_lock = RLock()
+        self._pending_appointment: _PendingAppointment | None = None
 
     def get_parameter_options(self, attr: str) -> list[str]:
         """Return active protocol options, including profile-specific choices."""
@@ -175,6 +196,11 @@ class MideaDCDevice(MideaDevice):
 
     def process_message(self, msg: bytes) -> dict[str, Any]:
         """Midea DC device process message."""
+        with self._appointment_lock:
+            return self._process_message(msg)
+
+    def _process_message(self, msg: bytes) -> dict[str, Any]:
+        """Publish real state before checking a pending reservation confirmation."""
         message = MessageDCResponse(msg)
         _LOGGER.debug("[%s] Received: %s", self.device_id, message)
         new_status = {}
@@ -224,10 +250,90 @@ class MideaDCDevice(MideaDevice):
                 ]
             self._attributes.update(controls)
             new_status.update({str(attr): value for attr, value in controls.items()})
+            self._confirm_appointment(message.message_type)
         return new_status
+
+    def _expire_appointment(self) -> None:
+        """Never start a reservation whose confirmation did not arrive in time."""
+        if (
+            self._pending_appointment is not None
+            and monotonic() >= self._pending_appointment.expires
+        ):
+            self._pending_appointment = None
+            _LOGGER.warning(
+                "[%s] Reservation confirmation timed out; not starting",
+                self.device_id,
+            )
+
+    def _confirm_appointment(self, message_type: MessageType) -> None:
+        """Start only after a query confirms the wait, flag and unchanged options."""
+        self._expire_appointment()
+        pending = self._pending_appointment
+        if pending is None:
+            return
+        if (
+            self._controls.appointment_parameters() != pending.parameters
+            or self._controls.remaining_minutes() != pending.duration
+        ):
+            self._pending_appointment = None
+            _LOGGER.warning(
+                "[%s] Reservation parameters changed; not starting",
+                self.device_id,
+            )
+            return
+        wait = int.from_bytes(
+            self._controls.body[APPOINTMENT_TIME_OFFSET:APPOINTMENT_TIME_END],
+            "little",
+        )
+        if (
+            not self._controls.appointment_available()
+            or self._controls.appointment_enabled() is not True
+            or wait <= 0
+            or abs(wait - pending.wait) > APPOINTMENT_WAIT_TOLERANCE
+        ):
+            return
+        if message_type != MessageType.query:
+            # The immediate query can race the appliance's state update.
+            # A matching notification requests a fresh query, never a start.
+            self.build_send(MessageQuery(self._message_protocol_version))
+            return
+        self._pending_appointment = None
+        try:
+            # Recalculate at confirmation time so a minute boundary cannot
+            # extend the user's requested completion deadline.
+            message = self._controls.make_message(
+                DeviceAttributes.appointment_finish,
+                pending.target,
+                self._message_protocol_version,
+            )
+        except ValueError:
+            _LOGGER.warning(
+                "[%s] Reservation deadline is no longer valid; not starting",
+                self.device_id,
+            )
+            return
+        self.build_send(message)
+        self.build_send(MessageQuery(self._message_protocol_version))
 
     def set_attribute(self, attr: str, value: bool | float | str) -> None:
         """Midea DC device set attribute."""
+        with self._appointment_lock:
+            self._expire_appointment()
+            cancelling = value is False and attr in (
+                DeviceAttributes.appointment,
+                DeviceAttributes.power,
+                DeviceAttributes.start,
+            )
+            if cancelling:
+                self._pending_appointment = None
+            elif self._pending_appointment is not None:
+                raise ValueError(
+                    "Wait for reservation confirmation before another command",
+                )
+            self._set_attribute(attr, value)
+
+    def _set_attribute(self, attr: str, value: bool | float | str) -> None:
+        """Serialize commands, preparing reservations without starting a cycle."""
         if self._controls is not None and self._controls.supports(attr):
             message_set = self._controls.make_message(
                 attr,
@@ -236,6 +342,22 @@ class MideaDCDevice(MideaDevice):
             )
             if attr == DeviceAttributes.appointment and value is False:
                 self.build_send(MessageStart(self._message_protocol_version))
+            if attr == DeviceAttributes.appointment_finish:
+                body = bytearray(message_set.body)
+                body[STATUS_OFFSET] = UNCHANGED
+                self.build_send(MessageParameters(self._message_protocol_version, body))
+                self._pending_appointment = _PendingAppointment(
+                    target=cast("str", value),
+                    wait=int.from_bytes(
+                        body[APPOINTMENT_TIME_OFFSET:APPOINTMENT_TIME_END],
+                        "little",
+                    ),
+                    duration=self._controls.remaining_minutes(),
+                    parameters=self._controls.appointment_parameters(),
+                    expires=monotonic() + APPOINTMENT_CONFIRMATION_TIMEOUT,
+                )
+                self.build_send(MessageQuery(self._message_protocol_version))
+                return
             self.build_send(message_set)
             self.build_send(MessageQuery(self._message_protocol_version))
             return

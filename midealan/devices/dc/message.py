@@ -459,6 +459,20 @@ class DCControls:
             "little",
         )
 
+    def appointment_parameters(self) -> bytes:
+        """Identify selected parameters independently of reservation/status fields."""
+        return (
+            self.body[BASIC_PARAMETER_START:APPOINTMENT_REPORT_OFFSET]
+            + bytes([self.body[APPOINTMENT_REPORT_OFFSET] & ~APPOINTMENT_MASK])
+            + self.body[STERILIZE_FLAG_OFFSET:APPOINTMENT_TIME_OFFSET]
+            + (
+                self.body[TEMPERATURE_REPORT_OFFSET : TEMPERATURE_REPORT_OFFSET + 1]
+                + self.body[SEASON_REPORT_OFFSET : SEASON_REPORT_OFFSET + 1]
+                if self.profile
+                else b""
+            )
+        )
+
     def decode_appointment(self) -> dict[ControlAttributes, ControlValue]:
         """Report a completion estimate only while a valid reservation is present."""
         enabled = self.appointment_enabled()
@@ -590,7 +604,16 @@ class DCControls:
         # Active reservation cancellation first uses a separate pause command.
         # Combining pause with these fields makes the device ignore the clear.
         body[STATUS_OFFSET] = START_COMMAND if enabled else UNCHANGED
-        body[APPOINTMENT_REPORT_OFFSET] = APPOINTMENT_ON if enabled else APPOINTMENT_OFF
+        # This verified appliance ignored the generic FD "on" selector.
+        # Write an explicit packed byte preserving reported adjacent fields;
+        # generic Lua devices retain their FD/FC selector masks.
+        body[APPOINTMENT_REPORT_OFFSET] = (
+            (self.body[APPOINTMENT_REPORT_OFFSET] & ~APPOINTMENT_MASK) | int(enabled)
+            if self.profile
+            else APPOINTMENT_ON
+            if enabled
+            else APPOINTMENT_OFF
+        )
         body[APPOINTMENT_TIME_OFFSET:APPOINTMENT_TIME_END] = wait.to_bytes(
             APPOINTMENT_TIME_END - APPOINTMENT_TIME_OFFSET,
             "little",

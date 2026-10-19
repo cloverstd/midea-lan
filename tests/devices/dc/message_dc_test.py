@@ -121,6 +121,25 @@ class TestMessageStart:
         assert msg.body == bytearray([0x02, 0xFF, 0x00])
 
 
+@pytest.mark.parametrize("profile", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("flags", [0, 4, 0x54])
+def test_reservation_flag_preserves_profile_neighbours(
+    profile: bool,
+    enabled: bool,
+    flags: int,
+) -> None:
+    """Use the appliance's packed byte while retaining generic Lua selectors."""
+    report = bytearray(DC_BODY)
+    report[12] = flags | int(not enabled)
+    controls = DCControls(profile=profile)
+    controls.update(report)
+    encoded = controls.encode_appointment(enabled=enabled, wait=600 if enabled else 0)
+    assert encoded[12] == (flags | int(enabled) if profile else 253 if enabled else 252)
+    assert encoded[3:12] == report[3:12]
+    assert encoded[13] == report[13]
+
+
 @pytest.mark.parametrize(
     ("attribute", "value"),
     [(Attr.temperature_control, "low"), (Attr.timed_extra, 10)],

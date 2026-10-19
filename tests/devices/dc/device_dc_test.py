@@ -330,13 +330,13 @@ def test_finish_time_subtracts_program_duration_and_is_not_optimistic() -> None:
         device.set_attribute(Attr.appointment_finish, target)
     body = send.call_args_list[0].args[0].body
     assert body[1] == 255
-    assert body[2] == 1
+    assert body[2] == 255
     assert int.from_bytes(body[14:16], "little") == 600 - duration
     assert body[3:12] == device._controls.body[3:12]
     assert device.attributes == before
     assert send.call_args_list[1].args[0].body == b"\x03"
     assert len(body) == 22
-    assert body[12] == 253
+    assert body[12] == 5
     assert body[13] == device._controls.body[13]
 
 
@@ -352,7 +352,7 @@ def test_cancel_pauses_and_clears_both_fields_without_starting(report: bytes) ->
     assert body[1:3] == bytes([255, 255])
     assert body[14:16] == bytes(2)
     assert body[3:12] == report[3:12]
-    assert body[12] == 252
+    assert body[12] == report[12] & ~3
     assert body[13] == report[13]
     assert device.get_attribute(Attr.appointment) is True
     cancelled = bytearray(report)
@@ -401,7 +401,186 @@ def test_dryer_can_edit_or_cancel_a_selected_but_not_started_reservation() -> No
     with patch.object(device, "build_send") as send:
         device.set_attribute(Attr.appointment, False)
     assert send.call_args_list[0].args[0].body[2] == 0
-    assert send.call_args_list[1].args[0].body[12] == 252
+    assert send.call_args_list[1].args[0].body[12] == report[12] & ~3
+
+
+@pytest.mark.parametrize("profile", [False, True])
+def test_reservation_starts_only_after_a_matching_query(profile: bool) -> None:
+    """A prepare write cannot start a cycle before its real fields are confirmed."""
+    device = dryer() if profile else MideaDCDevice(customize="", **BASE_ARGS)
+    if not profile:
+        report = bytearray(DC_BODY)
+        report[1:3] = bytes([1, 1])
+        device.process_message(frame(report))
+    with (
+        patch("midealan.devices.dc.message.datetime") as clock,
+        patch.object(device, "build_send") as send,
+    ):
+        clock.now.return_value = NOW
+        clock.fromisoformat.side_effect = datetime.fromisoformat
+        target = (NOW.replace(second=0) + timedelta(hours=10)).isoformat()
+        device.set_attribute(Attr.appointment_finish, target)
+        assert len(send.call_args_list) == 2
+        prepare = send.call_args_list[0].args[0].body
+        assert prepare[1:3] == bytes([255, 255])
+        assert prepare[12] == (5 if profile else 253)
+        assert send.call_args_list[1].args[0].body == b"\x03"
+        assert device._controls is not None
+        report = bytearray(device._controls.body)
+        report[0:3] = bytes([3, 1, 6])
+        report[12] = report[12] & ~3 | 1
+        report[14:16] = prepare[14:16]
+        if not profile:
+            # These extensions are not generic Lua fields or generic controls.
+            report[36] += 1
+            report[42] += 1
+        device.process_message(frame(report))
+        assert len(send.call_args_list) == 4
+        started = send.call_args_list[2].args[0].body
+        assert started[2] == 1
+        assert started[3:16] == prepare[3:16]
+        assert send.call_args_list[3].args[0].body == b"\x03"
+        device.process_message(frame(report))
+        assert len(send.call_args_list) == 4
+
+
+@pytest.mark.parametrize(
+    "response",
+    ["ack", "notify", "stale", "wrong_wait", "zero_wait", "running"],
+)
+def test_unconfirmed_reservation_never_sends_start(response: str) -> None:
+    """Acks, notifications and rejected/incorrect fields cannot authorize a start."""
+    device = dryer()
+    assert device._controls is not None
+    with (
+        patch("midealan.devices.dc.message.datetime") as clock,
+        patch.object(device, "build_send") as send,
+    ):
+        clock.now.return_value = NOW
+        clock.fromisoformat.side_effect = datetime.fromisoformat
+        minutes = 91 if response == "zero_wait" else 600
+        target = (NOW.replace(second=0) + timedelta(minutes=minutes)).isoformat()
+        device.set_attribute(Attr.appointment_finish, target)
+        prepare = send.call_args_list[0].args[0].body
+        report = bytearray(device._controls.body)
+        report[2] = 6
+        report[12] = report[12] & ~3 | 1
+        report[14:16] = prepare[14:16]
+        if response == "ack":
+            device.process_message(frame(bytes([2]) + bytes(21), MessageType.set))
+        elif response == "notify":
+            report[0] = 4
+            device.process_message(frame(report, MessageType.notify1))
+        else:
+            if response == "stale":
+                report[12] &= ~3
+            elif response == "wrong_wait":
+                report[14:16] = (100).to_bytes(2, "little")
+            elif response == "zero_wait":
+                report[14:16] = bytes(2)
+            elif response == "running":
+                report[2] = 2
+            device.process_message(frame(report))
+        assert len(send.call_args_list) == (3 if response == "notify" else 2)
+        assert device._pending_appointment is not None
+        if response == "notify":
+            assert send.call_args_list[-1].args[0].body == b"\x03"
+
+
+@pytest.mark.parametrize("offset", [4, 9, 12, 13, 17, 36, 42])
+def test_parameter_change_aborts_pending_reservation(offset: int) -> None:
+    """Do not start if another controller changes selected options or duration."""
+    device = dryer()
+    assert device._controls is not None
+    with (
+        patch("midealan.devices.dc.message.datetime") as clock,
+        patch.object(device, "build_send") as send,
+    ):
+        clock.now.return_value = NOW
+        clock.fromisoformat.side_effect = datetime.fromisoformat
+        device.set_attribute(
+            Attr.appointment_finish,
+            (NOW.replace(second=0) + timedelta(hours=10)).isoformat(),
+        )
+        report = bytearray(device._controls.body)
+        report[12] = report[12] & ~3 | 1
+        report[14:16] = send.call_args_list[0].args[0].body[14:16]
+        report[offset] += 4 if offset == 12 else 1
+        device.process_message(frame(report))
+        assert device._pending_appointment is None
+        assert len(send.call_args_list) == 2
+
+
+def test_reservation_confirmation_timeout_never_starts() -> None:
+    """Even a matching delayed report cannot start an expired request."""
+    device = dryer()
+    assert device._controls is not None
+    with (
+        patch("midealan.devices.dc.message.datetime") as clock,
+        patch("midealan.devices.dc.monotonic", return_value=100) as timer,
+        patch.object(device, "build_send") as send,
+    ):
+        clock.now.return_value = NOW
+        clock.fromisoformat.side_effect = datetime.fromisoformat
+        device.set_attribute(
+            Attr.appointment_finish,
+            (NOW.replace(second=0) + timedelta(hours=10)).isoformat(),
+        )
+        report = bytearray(device._controls.body)
+        report[12] = report[12] & ~3 | 1
+        report[14:16] = send.call_args_list[0].args[0].body[14:16]
+        timer.return_value = 115
+        device.process_message(frame(report))
+        assert device._pending_appointment is None
+        assert len(send.call_args_list) == 2
+
+
+@pytest.mark.parametrize("attribute", ["appointment", "power", "start"])
+def test_cancel_or_stop_discards_pending_start(attribute: str) -> None:
+    """Cancellation wins over a later otherwise valid query confirmation."""
+    device = dryer()
+    assert device._controls is not None
+    with (
+        patch("midealan.devices.dc.message.datetime") as clock,
+        patch.object(device, "build_send") as send,
+    ):
+        clock.now.return_value = NOW
+        clock.fromisoformat.side_effect = datetime.fromisoformat
+        target = (NOW.replace(second=0) + timedelta(hours=10)).isoformat()
+        device.set_attribute(Attr.appointment_finish, target)
+        report = bytearray(device._controls.body)
+        report[12] = report[12] & ~3 | 1
+        report[14:16] = send.call_args_list[0].args[0].body[14:16]
+        with pytest.raises(ValueError, match="Wait for reservation confirmation"):
+            device.set_attribute(Attr.sterilize, False)
+        device.set_attribute(attribute, False)
+        count = len(send.call_args_list)
+        device.process_message(frame(report))
+        assert device._pending_appointment is None
+        assert len(send.call_args_list) == count
+
+
+def test_clock_change_before_confirmation_does_not_start_past_deadline() -> None:
+    """Revalidation fails closed if the wall clock jumps beyond the deadline."""
+    device = dryer()
+    assert device._controls is not None
+    with (
+        patch("midealan.devices.dc.message.datetime") as clock,
+        patch.object(device, "build_send") as send,
+    ):
+        clock.now.return_value = NOW
+        clock.fromisoformat.side_effect = datetime.fromisoformat
+        device.set_attribute(
+            Attr.appointment_finish,
+            (NOW.replace(second=0) + timedelta(hours=10)).isoformat(),
+        )
+        report = bytearray(device._controls.body)
+        report[12] = report[12] & ~3 | 1
+        report[14:16] = send.call_args_list[0].args[0].body[14:16]
+        clock.now.return_value = NOW + timedelta(hours=11)
+        device.process_message(frame(report))
+        assert device._pending_appointment is None
+        assert len(send.call_args_list) == 2
 
 
 @pytest.mark.parametrize("profile", [False, True])
