@@ -313,10 +313,16 @@ def test_app_reservations_and_start_state(
     assert finish == NOW.replace(second=0) + timedelta(minutes=wait + duration)
 
 
-def test_finish_time_subtracts_program_duration_and_is_not_optimistic() -> None:
+@pytest.mark.parametrize("minutes", [90, 270])
+def test_finish_time_subtracts_program_duration_and_is_not_optimistic(
+    minutes: int,
+) -> None:
     """Use a timezone-bearing deadline, not total minutes until completion."""
     device = dryer()
     assert device._controls is not None
+    report = bytearray(device._controls.body)
+    report[17:19] = minutes.to_bytes(2, "little")
+    device.process_message(frame(report))
     before = dict(device.attributes)
     target = (NOW.replace(second=0) + timedelta(hours=10)).isoformat()
     duration = device.get_attribute("time_remaining")
@@ -584,15 +590,23 @@ def test_clock_change_before_confirmation_does_not_start_past_deadline() -> None
 
 
 @pytest.mark.parametrize("profile", [False, True])
-def test_duration_above_255_uses_little_endian_minutes(profile: bool) -> None:
-    """Generic and verified dryers report a sixteen-bit minute duration."""
+@pytest.mark.parametrize(
+    ("raw_duration", "minutes"),
+    [(b"\x0e\x01", 270), (b"\x2c\x01", 300)],
+)
+def test_duration_above_255_uses_little_endian_minutes(
+    profile: bool,
+    raw_duration: bytes,
+    minutes: int,
+) -> None:
+    """The appliance-confirmed 0E01 duration is 270 minutes, not 74 minutes."""
     report = bytearray(DC_RESERVED if profile else DC_BODY)
     report[1:3] = bytes([1, 1])
-    report[17:19] = (300).to_bytes(2, "little")
+    report[17:19] = raw_duration
     device = dryer(report) if profile else MideaDCDevice(customize="", **BASE_ARGS)
     if not profile:
         device.process_message(frame(report))
-    assert device.get_attribute("time_remaining") == 300
+    assert device.get_attribute("time_remaining") == minutes
 
 
 @pytest.mark.parametrize("profile", [False, True])
