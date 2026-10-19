@@ -310,13 +310,16 @@ class DCGeneralMessageBody(MessageBody):
         self.water_box = body[29]
         self.washing_data = body[3:15]
         self.progress = 0
-        self.time_remaining: float | None = None
+        self.time_remaining: int | None = None
         for i in range(1, 7):
             if (body[16] & (1 << i)) > 0:
                 self.progress = i
                 break
         if self.power:
-            self.time_remaining = body[17] + body[18] * 60
+            self.time_remaining = int.from_bytes(
+                body[REMAINING_TIME_OFFSET:REMAINING_TIME_END],
+                "little",
+            )
 
 
 class MessageDCResponse(MessageResponse):
